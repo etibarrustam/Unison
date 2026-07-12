@@ -23,7 +23,35 @@ final class AppState: ObservableObject {
     // Group operations skip devices for which this returns false.
     var isEnabled: (String) -> Bool = { _ in true }
 
+    // Per-device hardware trim: shown level stays uniform, output shifts.
+    var volumeTrim: (String) -> Double = { _ in 0 }
+    var brightnessTrim: (String) -> Double = { _ in 0 }
+
     init(applier: DeviceApplier) { self.applier = applier }
+
+    // All hardware writes pass through here so trims always apply.
+    private func apply(_ s: SpeakerDevice) {
+        var t = s
+        t.volume = LevelMath.clamp(s.volume + volumeTrim(s.id))
+        applier.applyVolume(t)
+    }
+    private func apply(_ d: DisplayDevice) {
+        var t = d
+        t.brightness = LevelMath.clamp(d.brightness + brightnessTrim(d.id))
+        applier.applyBrightness(t)
+    }
+    private func applyMute(_ s: SpeakerDevice) {
+        var t = s
+        t.volume = LevelMath.clamp(s.volume + volumeTrim(s.id))
+        applier.applyMute(t)
+    }
+
+    func reapplyVolume(id: String) {
+        if let s = speakers.first(where: { $0.id == id }) { apply(s) }
+    }
+    func reapplyBrightness(id: String) {
+        if let d = displays.first(where: { $0.id == id }) { apply(d) }
+    }
 
     // Re-discovers hardware; replaces the applier so stale DDC refs are dropped.
     func refreshDevices() {
@@ -38,25 +66,25 @@ final class AppState: ObservableObject {
     func setAllVolume(_ v: Double) {
         let c = LevelMath.clamp(v)
         for i in speakers.indices where isEnabled(speakers[i].id) {
-            speakers[i].volume = c; applier.applyVolume(speakers[i])
+            speakers[i].volume = c; apply(speakers[i])
         }
         persist()
     }
     func setAllBrightness(_ v: Double) {
         let c = LevelMath.clamp(v)
         for i in displays.indices where isEnabled(displays[i].id) {
-            displays[i].brightness = c; applier.applyBrightness(displays[i])
+            displays[i].brightness = c; apply(displays[i])
         }
         persist()
     }
     func setVolume(id: String, _ v: Double) {
         guard let i = speakers.firstIndex(where: { $0.id == id }) else { return }
-        speakers[i].volume = LevelMath.clamp(v); applier.applyVolume(speakers[i])
+        speakers[i].volume = LevelMath.clamp(v); apply(speakers[i])
         persist()
     }
     func setBrightness(id: String, _ v: Double) {
         guard let i = displays.firstIndex(where: { $0.id == id }) else { return }
-        displays[i].brightness = LevelMath.clamp(v); applier.applyBrightness(displays[i])
+        displays[i].brightness = LevelMath.clamp(v); apply(displays[i])
         persist()
     }
 
@@ -64,14 +92,14 @@ final class AppState: ObservableObject {
     func nudgeAllVolume(_ delta: Double) {
         for i in speakers.indices where isEnabled(speakers[i].id) {
             speakers[i].volume = LevelMath.step(speakers[i].volume, by: delta)
-            applier.applyVolume(speakers[i])
+            apply(speakers[i])
         }
         persist()
     }
     func nudgeAllBrightness(_ delta: Double) {
         for i in displays.indices where isEnabled(displays[i].id) {
             displays[i].brightness = LevelMath.step(displays[i].brightness, by: delta)
-            applier.applyBrightness(displays[i])
+            apply(displays[i])
         }
         persist()
     }
@@ -80,7 +108,7 @@ final class AppState: ObservableObject {
         let enabled = speakers.filter { isEnabled($0.id) }
         let anyUnmuted = enabled.contains { !$0.muted }
         for i in speakers.indices where isEnabled(speakers[i].id) {
-            speakers[i].muted = anyUnmuted; applier.applyMute(speakers[i])
+            speakers[i].muted = anyUnmuted; applyMute(speakers[i])
         }
         persist()
     }
@@ -88,7 +116,7 @@ final class AppState: ObservableObject {
     func persist() { Persistence.saveVolumes(speakers, brightness: displays) }
 
     func applyAll() {
-        for s in speakers { applier.applyVolume(s) }
-        for d in displays { applier.applyBrightness(d) }
+        for s in speakers { apply(s) }
+        for d in displays { apply(d) }
     }
 }

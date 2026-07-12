@@ -56,4 +56,40 @@ struct AppStateTests {
         s.setAllVolume(0.5)
         #expect(s.speakers.map(\.volume) == [0.5, 0.5])
     }
+
+    // Per-device trims shift the hardware value, not the shown level.
+    @Test func trimsApplyToHardwareOnly() {
+        let rec = RecordingApplier()
+        let s = AppState(applier: rec)
+        s.speakers = [
+            SpeakerDevice(id: "mac", name: "Mac", backend: .coreAudio(0), volume: 0.4, muted: false),
+            SpeakerDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), volume: 0.4, muted: false)
+        ]
+        s.displays = [
+            DisplayDevice(id: "builtin", name: "Built-in", backend: .builtin, brightness: 0.5)
+        ]
+        s.volumeTrim = { $0 == "mac" ? 0.2 : 0 }
+        s.brightnessTrim = { _ in -0.1 }
+
+        s.setAllVolume(0.5)
+        #expect(s.speakers.map(\.volume) == [0.5, 0.5])
+        #expect(abs((rec.volumes["mac"] ?? 0) - 0.7) < 0.0001)
+        #expect(abs((rec.volumes["lg"] ?? 0) - 0.5) < 0.0001)
+
+        s.setAllBrightness(0.5)
+        #expect(s.displays[0].brightness == 0.5)
+        #expect(abs((rec.brightnesses["builtin"] ?? 0) - 0.4) < 0.0001)
+
+        // Trims clamp at the hardware bounds.
+        s.setVolume(id: "mac", 0.95)
+        #expect(rec.volumes["mac"] == 1.0)
+    }
+}
+
+final class RecordingApplier: DeviceApplier {
+    var volumes: [String: Double] = [:]
+    var brightnesses: [String: Double] = [:]
+    func applyVolume(_ device: SpeakerDevice) { volumes[device.id] = device.volume }
+    func applyMute(_ device: SpeakerDevice) {}
+    func applyBrightness(_ device: DisplayDevice) { brightnesses[device.id] = device.brightness }
 }

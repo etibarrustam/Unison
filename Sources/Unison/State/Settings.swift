@@ -34,10 +34,29 @@ final class Settings: ObservableObject {
         }
     }
 
+    // Per-device hardware trims in -0.5...0.5. The popover shows uniform
+    // levels; these shift what actually reaches each device.
+    var volumeTrims: [String: Double] {
+        willSet { if newValue != volumeTrims { objectWillChange.send() } }
+        didSet {
+            guard volumeTrims != oldValue else { return }
+            UserDefaults.standard.set(volumeTrims, forKey: "unison.volumeTrims")
+        }
+    }
+    var brightnessTrims: [String: Double] {
+        willSet { if newValue != brightnessTrims { objectWillChange.send() } }
+        didSet {
+            guard brightnessTrims != oldValue else { return }
+            UserDefaults.standard.set(brightnessTrims, forKey: "unison.brightnessTrims")
+        }
+    }
+
     init() {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         let saved = UserDefaults.standard.stringArray(forKey: "unison.disabledDevices") ?? []
         disabledDevices = Set(saved)
+        volumeTrims = UserDefaults.standard.dictionary(forKey: "unison.volumeTrims") as? [String: Double] ?? [:]
+        brightnessTrims = UserDefaults.standard.dictionary(forKey: "unison.brightnessTrims") as? [String: Double] ?? [:]
     }
 
     func isEnabled(_ id: String) -> Bool { !disabledDevices.contains(id) }
