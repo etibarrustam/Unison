@@ -5,6 +5,7 @@ struct UnisonApp: App {
     @StateObject private var state: AppState
     @StateObject private var settings: Settings
     private let keyboard = KeyboardTap()
+    private let watcher = DeviceWatcher()
 
     init() {
         let built = DeviceDiscovery.buildInitialState()
@@ -19,6 +20,8 @@ struct UnisonApp: App {
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
         startKeyboard(s, cfg)
+        watcher.onChange = { [weak s] in s?.refreshDevices() }
+        watcher.start()
     }
 
     private func startKeyboard(_ state: AppState, _ settings: Settings) {

@@ -27,9 +27,10 @@ enum DeviceDiscovery {
                 volume: saved["vol.\(key)"] ?? 0.3, muted: false))
         }
         for (i, d) in ddcList.enumerated() where ddc.probe(d, code: DDCController.vcpVolume) {
-            speakers.append(SpeakerDevice(id: "spk-\(d.id)", name: names.external(i, fallback: d.name),
+            let key = "spk-\(names.externalKey(i, fallback: d.id))"
+            speakers.append(SpeakerDevice(id: key, name: names.externalName(i, fallback: d.name),
                 backend: .ddc(d.id),
-                volume: saved["vol.spk-\(d.id)"] ?? 0.3, muted: false))
+                volume: saved["vol.\(key)"] ?? 0.3, muted: false))
         }
 
         // Displays: built-in panel + each DDC display that supports brightness.
@@ -39,8 +40,9 @@ enum DeviceDiscovery {
                 backend: .builtin, brightness: saved["bri.builtin"] ?? 0.7))
         }
         for (i, d) in ddcList.enumerated() where ddc.probe(d, code: DDCController.vcpBrightness) {
-            displays.append(DisplayDevice(id: "dsp-\(d.id)", name: names.external(i, fallback: d.name),
-                backend: .ddc(d.id), brightness: saved["bri.dsp-\(d.id)"] ?? 0.7))
+            let key = "dsp-\(names.externalKey(i, fallback: d.id))"
+            displays.append(DisplayDevice(id: key, name: names.externalName(i, fallback: d.name),
+                backend: .ddc(d.id), brightness: saved["bri.\(key)"] ?? 0.7))
         }
 
         let applier = HardwareApplier(audio: audio, ddc: ddc, builtin: builtin, ddcDisplays: ddcByID)
@@ -49,23 +51,33 @@ enum DeviceDiscovery {
 
     private struct ScreenNames {
         let builtin: String?
-        let externals: [String]
+        let externals: [(name: String, key: String)]
         // Matches DDC displays to screens by order; exact with one external,
         // best-effort with several.
-        func external(_ index: Int, fallback: String) -> String {
-            index < externals.count ? externals[index] : fallback
+        func externalName(_ index: Int, fallback: String) -> String {
+            index < externals.count ? externals[index].name : fallback
+        }
+        // Stable identity so a monitor keeps its settings and a different
+        // monitor never inherits them.
+        func externalKey(_ index: Int, fallback: String) -> String {
+            index < externals.count ? externals[index].key : fallback
         }
     }
 
     private static func screenNames() -> ScreenNames {
         var builtin: String?
-        var externals: [String] = []
+        var externals: [(name: String, key: String)] = []
+        var seen: Set<String> = []
         for screen in NSScreen.screens {
             guard let n = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { continue }
             if CGDisplayIsBuiltin(n) != 0 {
                 builtin = screen.localizedName
             } else {
-                externals.append(screen.localizedName)
+                var key = "\(CGDisplayVendorNumber(n))-\(CGDisplayModelNumber(n))-\(CGDisplaySerialNumber(n))"
+                // Two identical monitors: disambiguate by position.
+                if seen.contains(key) { key += "-\(externals.count)" }
+                seen.insert(key)
+                externals.append((screen.localizedName, key))
             }
         }
         return ScreenNames(builtin: builtin, externals: externals)
