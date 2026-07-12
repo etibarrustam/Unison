@@ -17,20 +17,25 @@ enum DeviceDiscovery {
         // Speakers: real CoreAudio outputs with software volume, plus DDC
         // monitors with speakers. Aggregates are driven via their members.
         var speakers: [SpeakerDevice] = []
+        var balanceMax: [String: Int] = [:]
         for out in audio.outputDevices()
         where out.supportsSoftwareVolume && !out.isVirtualOrAggregate {
             let key = "spk-ca-\(out.uid)"
             speakers.append(SpeakerDevice(id: key, name: out.name,
                 backend: .coreAudio(out.id),
-                volume: saved["vol.\(key)"] ?? 0.3, muted: false))
+                volume: saved["vol.\(key)"] ?? 0.3, muted: false,
+                pannable: audio.supportsPan(out.id) || audio.hasChannelVolumes(out.id)))
         }
         for (i, d) in ddcList.enumerated() {
             let ident = screens.match(d, index: i)
             let key = "spk-\(ident.key)"
             guard cachedProbe(ddc, d, code: DDCController.vcpVolume, cacheKey: key) else { continue }
+            let balMax = cachedBalanceMax(ddc, d, cacheKey: key)
+            if let balMax { balanceMax[d.id] = balMax }
             speakers.append(SpeakerDevice(id: key, name: ident.name,
                 backend: .ddc(d.id),
-                volume: saved["vol.\(key)"] ?? 0.3, muted: false))
+                volume: saved["vol.\(key)"] ?? 0.3, muted: false,
+                pannable: balMax != nil))
         }
 
         // Displays: built-in panel plus DDC monitors with brightness.
@@ -47,8 +52,22 @@ enum DeviceDiscovery {
                 backend: .ddc(d.id), brightness: saved["bri.\(key)"] ?? 0.7))
         }
 
-        let applier = HardwareApplier(audio: audio, ddc: ddc, builtin: builtin, ddcDisplays: ddcByID)
+        let applier = HardwareApplier(audio: audio, ddc: ddc, builtin: builtin,
+                                      ddcDisplays: ddcByID, ddcBalanceMax: balanceMax)
         return (speakers, displays, applier)
+    }
+
+    // Audio balance support and its maximum, cached like the other probes.
+    // 0 max marks unsupported so flaky monitors are not re-probed forever.
+    private static func cachedBalanceMax(_ ddc: DDCController, _ d: DDCDisplay,
+                                         cacheKey: String) -> Int? {
+        let key = "unison.balmax.\(cacheKey)"
+        if let cached = UserDefaults.standard.object(forKey: key) as? Int {
+            return cached > 0 ? cached : nil
+        }
+        let max = ddc.probeMax(d, code: DDCController.vcpBalance)
+        UserDefaults.standard.set(max ?? 0, forKey: key)
+        return max
     }
 
     // Probing blocks the main thread on flaky DDC links, so positive

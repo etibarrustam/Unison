@@ -15,6 +15,7 @@ struct DDCDisplay: Identifiable {
 final class DDCController {
     static let vcpBrightness: UInt8 = 0x10
     static let vcpVolume: UInt8 = 0x62
+    static let vcpBalance: UInt8 = 0x93
     private let i2cChip: UInt32 = 0x37
     private let subAddress: UInt32 = 0x51
 
@@ -55,6 +56,32 @@ final class DDCController {
 
     func setVolume(_ d: DDCDisplay, percent: Int) {
         throttledWrite(d, key: "\(d.id).v", DDCMessage.setVCP(Self.vcpVolume, scaled(percent)))
+    }
+
+    // Balance semantics per MCCS: midpoint is centered, low favors left.
+    func setBalance(_ d: DDCDisplay, position: SpeakerPosition, max: Int) {
+        let value: Int
+        switch position {
+        case .left: value = 0
+        case .center: value = max / 2
+        case .right: value = max
+        }
+        throttledWrite(d, key: "\(d.id).bal", DDCMessage.setVCP(Self.vcpBalance, UInt16(clamping: value)))
+    }
+
+    // Like probe, but reports the feature maximum for scaling.
+    func probeMax(_ d: DDCDisplay, code: UInt8) -> Int? {
+        for _ in 0..<5 {
+            write(d, DDCMessage.getVCP(code))
+            usleep(40_000)
+            var buf = [UInt8](repeating: 0, count: 12)
+            let r = IOAVServiceReadI2C(d.service, i2cChip, subAddress, &buf, 12)
+            if r == kIOReturnSuccess, let reply = DDCMessage.parseGetReply(code, buf) {
+                return Int(reply.max)
+            }
+            usleep(40_000)
+        }
+        return nil
     }
 
     // Best-effort: retry a few times; success if any read parses for this code.

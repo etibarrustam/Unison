@@ -52,7 +52,15 @@ struct SettingsView: View {
                         ForEach(state.speakers) { s in
                             deviceRow(id: s.id, name: s.name,
                                       scale: volumeScaleBinding(s.id))
+                            if settings.spatialEnabled && s.pannable {
+                                positionRow(s.id)
+                            }
                         }
+                        HStack {
+                            Toggle("Speaker placement", isOn: $settings.spatialEnabled)
+                            InfoButton(text: "Match speakers to where they physically sit. A Left speaker plays only left-channel sound, Right only right-channel, Center plays both, so stereo and 8D audio image correctly across devices. Shown only for speakers whose hardware supports it; for monitors without it, set the balance once in the monitor's own menu.")
+                        }
+                        .onChange(of: settings.spatialEnabled) { _, _ in state.applyAll() }
                     }.padding(6)
                 } label: {
                     HStack {
@@ -78,7 +86,7 @@ struct SettingsView: View {
             .frame(width: 340)
         }
         .padding(20)
-        .frame(width: 680, height: 440)
+        .frame(width: 680, height: 520)
         .onAppear {
             // Device ids can change (replug, id scheme); a stale keyboard
             // target would leave the picker blank and silently act as all.
@@ -99,6 +107,19 @@ struct SettingsView: View {
             InfoButton(text: info)
             Spacer(minLength: 0)
         }
+    }
+
+    private func positionRow(_ id: String) -> some View {
+        Picker("Position", selection: Binding(
+            get: { settings.position(id).rawValue },
+            set: { settings.speakerPositions[id] = $0; state.reapplyVolume(id: id) }
+        )) {
+            Text("Left").tag("left")
+            Text("Center").tag("center")
+            Text("Right").tag("right")
+        }
+        .pickerStyle(.segmented)
+        .padding(.leading, 20)
     }
 
     private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {

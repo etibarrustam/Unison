@@ -8,6 +8,7 @@ final class Settings: ObservableObject {
     @AppStorage("unison.keyboardBrightnessTarget") var keyboardBrightnessTarget: String = "all"
     @AppStorage("unison.hudVolume") var hudVolume: Bool = true
     @AppStorage("unison.hudBrightness") var hudBrightness: Bool = true
+    @AppStorage("unison.spatial") var spatialEnabled: Bool = false
 
     // These publish manually and only on real changes: MenuBarExtra
     // rewrites its isInserted binding on every scene evaluation, and an
@@ -56,7 +57,21 @@ final class Settings: ObservableObject {
         }
     }
 
+    // Speaker positions for stereo placement, raw values of SpeakerPosition.
+    var speakerPositions: [String: String] {
+        willSet { if newValue != speakerPositions { objectWillChange.send() } }
+        didSet {
+            guard speakerPositions != oldValue else { return }
+            UserDefaults.standard.set(speakerPositions, forKey: "unison.speakerPositions")
+        }
+    }
+
+    func position(_ id: String) -> SpeakerPosition {
+        SpeakerPosition(rawValue: speakerPositions[id] ?? "center") ?? .center
+    }
+
     init() {
+        speakerPositions = UserDefaults.standard.dictionary(forKey: "unison.speakerPositions") as? [String: String] ?? [:]
         menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled
         let saved = UserDefaults.standard.stringArray(forKey: "unison.disabledDevices") ?? []

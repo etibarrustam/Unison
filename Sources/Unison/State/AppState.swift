@@ -30,6 +30,10 @@ final class AppState: ObservableObject {
     var volumeScale: (String) -> Double = { _ in 1 }
     var brightnessScale: (String) -> Double = { _ in 1 }
 
+    // Stereo placement, injected from Settings.
+    var spatialEnabled: () -> Bool = { false }
+    var speakerPosition: (String) -> SpeakerPosition = { _ in .center }
+
     init(applier: DeviceApplier) { self.applier = applier }
 
     // The single place a speaker's hardware output is computed: mute and
@@ -41,6 +45,7 @@ final class AppState: ObservableObject {
     private func apply(_ s: SpeakerDevice) {
         var t = s
         t.volume = effectiveVolume(s)
+        t.position = spatialEnabled() ? speakerPosition(s.id) : .center
         applier.applyVolume(t)
     }
     private func apply(_ d: DisplayDevice) {

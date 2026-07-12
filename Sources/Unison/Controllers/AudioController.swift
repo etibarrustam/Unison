@@ -25,11 +25,59 @@ final class AudioController {
         }
     }
 
-    func setVolume(_ id: AudioDeviceID, _ value: Double) {
+    func setVolume(_ id: AudioDeviceID, _ value: Double, position: SpeakerPosition = .center) {
         var v = Float32(min(1, max(0, value)))
-        // Try master, then per-channel 1 and 2.
+        if supportsPan(id) {
+            setPan(id, position)
+            if setScalar(id, element: kAudioObjectPropertyElementMain, &v) { return }
+            for ch: UInt32 in 1...2 { _ = setScalar(id, element: ch, &v) }
+            return
+        }
+        // No pan property: shape per-channel gains when positioned.
+        var left = Float32(position == .right ? 0 : v)
+        var right = Float32(position == .left ? 0 : v)
+        if position != .center, hasChannelVolumes(id) {
+            _ = setScalar(id, element: 1, &left)
+            _ = setScalar(id, element: 2, &right)
+            return
+        }
         if setScalar(id, element: kAudioObjectPropertyElementMain, &v) { return }
         for ch: UInt32 in 1...2 { _ = setScalar(id, element: ch, &v) }
+    }
+
+    func supportsPan(_ id: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStereoPan,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        guard AudioObjectHasProperty(id, &addr) else { return false }
+        var settable: DarwinBoolean = false
+        AudioObjectIsPropertySettable(id, &addr, &settable)
+        return settable.boolValue
+    }
+
+    func hasChannelVolumes(_ id: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyVolumeScalar,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: 1)
+        guard AudioObjectHasProperty(id, &addr) else { return false }
+        addr.mElement = 2
+        return AudioObjectHasProperty(id, &addr)
+    }
+
+    private func setPan(_ id: AudioDeviceID, _ position: SpeakerPosition) {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStereoPan,
+            mScope: kAudioDevicePropertyScopeOutput,
+            mElement: kAudioObjectPropertyElementMain)
+        var v: Float32
+        switch position {
+        case .left: v = 0
+        case .center: v = 0.5
+        case .right: v = 1
+        }
+        _ = AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
     }
 
     func setMuted(_ id: AudioDeviceID, _ muted: Bool) {

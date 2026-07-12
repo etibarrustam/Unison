@@ -101,6 +101,8 @@ struct UnisonApp: App {
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
+        s.spatialEnabled = { [weak cfg] in cfg?.spatialEnabled ?? false }
+        s.speakerPosition = { [weak cfg] id in cfg?.position(id) ?? .center }
         // Apply only after the scale and enable closures are wired, so the
         // launch write already respects per-device caps.
         s.applyAll()
