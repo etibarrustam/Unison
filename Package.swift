@@ -18,6 +18,8 @@ let package = Package(
                 .linkedFramework("SwiftUI")
             ]
         ),
+        // Run tests via Scripts/test.sh: swift-testing ships with the Command
+        // Line Tools off the default search path and needs extra flags.
         .testTarget(name: "UnisonTests", dependencies: ["Unison"], path: "Tests/UnisonTests")
     ]
 )
