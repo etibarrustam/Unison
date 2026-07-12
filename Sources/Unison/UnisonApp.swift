@@ -1,14 +1,62 @@
 import SwiftUI
 
-// Restores the menu bar icon when the app is opened while already running.
-// This is the recovery path for a hidden icon in a Dock-less app.
+// Recovery path for a hidden menu bar icon in a Dock-less app: opening
+// Unison again never restarts it and never re-shows the icon; instead the
+// running instance presents the Settings window.
 final class ReopenHandler: NSObject, NSApplicationDelegate {
     @MainActor static weak var settings: Settings?
+    @MainActor static weak var state: AppState?
+    private static let reopenNote = Notification.Name("com.unison.app.reopen")
+    private var recoveryWindow: NSWindow?
+
+    @MainActor
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        // Single instance: hand off to the running copy and exit.
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.unison.app"
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+        if !others.isEmpty {
+            DistributedNotificationCenter.default().postNotificationName(
+                Self.reopenNote, object: nil, userInfo: nil, deliverImmediately: true)
+            NSApp.terminate(nil)
+            return
+        }
+        DistributedNotificationCenter.default().addObserver(
+            forName: Self.reopenNote, object: nil, queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { Self.presentRecovery() }
+        }
+        // Fresh launch with the icon hidden: show Settings so the app
+        // is reachable.
+        if Self.settings?.menuIconVisible == false {
+            Self.presentRecovery()
+        }
+    }
 
     @MainActor
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        Self.settings?.menuIconVisible = true
+        if Self.settings?.menuIconVisible == false {
+            Self.presentRecovery()
+        }
         return false
+    }
+
+    @MainActor private static var sharedRecoveryWindow: NSWindow?
+
+    @MainActor
+    static func presentRecovery() {
+        guard let settings, let state else { return }
+        let w = sharedRecoveryWindow ?? {
+            let w = NSWindow(contentViewController:
+                NSHostingController(rootView: SettingsView(settings: settings, state: state)))
+            w.title = "Unison Settings"
+            w.isReleasedWhenClosed = false
+            sharedRecoveryWindow = w
+            return w
+        }()
+        NSApp.activate(ignoringOtherApps: true)
+        w.center()
+        w.makeKeyAndOrderFront(nil)
     }
 }
 
@@ -30,6 +78,7 @@ struct UnisonApp: App {
         let cfg = Settings()
         _settings = StateObject(wrappedValue: cfg)
         ReopenHandler.settings = cfg
+        ReopenHandler.state = s
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }

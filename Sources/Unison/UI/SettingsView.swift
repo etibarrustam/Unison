@@ -13,7 +13,7 @@ struct SettingsView: View {
                         row(Toggle("Launch at login", isOn: $settings.launchAtLogin),
                             info: "Starts Unison automatically when you log in, so keyboard control works from the first key press.")
                         row(Toggle("Show menu bar icon", isOn: $settings.menuIconVisible),
-                            info: "Hides the slider icon in the menu bar, also after restarts. To bring it back, open the Unison app again (Spotlight or Finder), and the icon reappears.")
+                            info: "Hides the slider icon in the menu bar, also after restarts. The keyboard keeps working. To reach Unison again, open the app (Spotlight or Finder): this window appears without restarting anything, and you can turn the icon back on here.")
                     }.padding(6)
                 }
                 GroupBox("Overlay") {
