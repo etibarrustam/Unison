@@ -11,6 +11,10 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A windowless menu bar app must not be reaped by macOS automatic
+        // or sudden termination.
+        ProcessInfo.processInfo.disableAutomaticTermination("menu bar controller")
+        ProcessInfo.processInfo.disableSuddenTermination()
         // Single instance: hand off to the running copy and exit.
         let bundleID = Bundle.main.bundleIdentifier ?? "com.unison.app"
         // isTerminated filter: a just-killed predecessor can linger in the
@@ -50,6 +54,12 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
+    // Menu bar app: closing the last window (Settings, or the HUD fading
+    // out) must never quit the app.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
     @MainActor private static var sharedRecoveryWindow: NSWindow?
 
     @MainActor
@@ -83,7 +93,6 @@ struct UnisonApp: App {
         let s = AppState(applier: built.applier)
         s.speakers = built.speakers
         s.displays = built.displays
-        s.applyAll()  // hardware matches stored levels on launch
         _state = StateObject(wrappedValue: s)
         let cfg = Settings()
         _settings = StateObject(wrappedValue: cfg)
@@ -92,6 +101,9 @@ struct UnisonApp: App {
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
+        // Apply only after the scale and enable closures are wired, so the
+        // launch write already respects per-device caps.
+        s.applyAll()
         startKeyboard(s, cfg)
         watcher.onChange = { [weak s] in s?.refreshDevices() }
         watcher.start()
