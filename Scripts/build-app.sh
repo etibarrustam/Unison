@@ -26,5 +26,9 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP"
+# Stable designated requirement so TCC grants survive rebuilds.
+codesign --force --deep --sign - \
+  --identifier com.unison.app \
+  -r='designated => identifier "com.unison.app"' \
+  "$APP"
 echo "Built $APP"
