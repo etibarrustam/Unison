@@ -79,6 +79,18 @@ struct SettingsView: View {
         }
         .padding(20)
         .frame(width: 680, height: 440)
+        .onAppear {
+            // Device ids can change (replug, id scheme); a stale keyboard
+            // target would leave the picker blank and silently act as all.
+            if settings.keyboardTarget != "all",
+               !state.speakers.contains(where: { $0.id == settings.keyboardTarget }) {
+                settings.keyboardTarget = "all"
+            }
+            if settings.keyboardBrightnessTarget != "all",
+               !state.displays.contains(where: { $0.id == settings.keyboardBrightnessTarget }) {
+                settings.keyboardBrightnessTarget = "all"
+            }
+        }
     }
 
     private func row(_ content: some View, info: String) -> some View {

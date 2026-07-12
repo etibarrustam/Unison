@@ -5,7 +5,7 @@ import AppKit
 // fill value (known OS limitation, also hits MonitorControl).
 @MainActor
 enum SystemOSD {
-    enum Kind { case volume, brightness, mute }
+    typealias Kind = OverlayKind
 
     private static let manager: NSObject? = {
         dlopen("/System/Library/PrivateFrameworks/OSD.framework/OSD", RTLD_NOW)

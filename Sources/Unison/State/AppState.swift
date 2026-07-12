@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 
+@MainActor
 protocol DeviceApplier {
     func applyVolume(_ device: SpeakerDevice)
     func applyMute(_ device: SpeakerDevice)
@@ -19,6 +20,7 @@ final class AppState: ObservableObject {
     @Published var displays: [DisplayDevice] = []
 
     private var applier: DeviceApplier
+    private var persistWork: DispatchWorkItem?
 
     // Group operations skip devices for which this returns false.
     var isEnabled: (String) -> Bool = { _ in true }
@@ -30,21 +32,21 @@ final class AppState: ObservableObject {
 
     init(applier: DeviceApplier) { self.applier = applier }
 
-    // All hardware writes pass through here so scales always apply.
+    // The single place a speaker's hardware output is computed: mute and
+    // scale both live here so every path agrees.
+    private func effectiveVolume(_ s: SpeakerDevice) -> Double {
+        s.muted ? 0 : LevelMath.clamp(s.volume * volumeScale(s.id))
+    }
+
     private func apply(_ s: SpeakerDevice) {
         var t = s
-        t.volume = LevelMath.clamp(s.volume * volumeScale(s.id))
+        t.volume = effectiveVolume(s)
         applier.applyVolume(t)
     }
     private func apply(_ d: DisplayDevice) {
         var t = d
         t.brightness = LevelMath.clamp(d.brightness * brightnessScale(d.id))
         applier.applyBrightness(t)
-    }
-    private func applyMute(_ s: SpeakerDevice) {
-        var t = s
-        t.volume = LevelMath.clamp(s.volume * volumeScale(s.id))
-        applier.applyMute(t)
     }
 
     func reapplyVolume(id: String) {
@@ -54,13 +56,37 @@ final class AppState: ObservableObject {
         if let d = displays.first(where: { $0.id == id }) { apply(d) }
     }
 
-    // Re-discovers hardware; replaces the applier so stale DDC refs are dropped.
+    var enabledSpeakersMuted: Bool {
+        let enabled = speakers.filter { isEnabled($0.id) }
+        return !enabled.isEmpty && enabled.allSatisfy(\.muted)
+    }
+
+    // Re-discovers hardware; replaces the applier so stale DDC refs are
+    // dropped, but keeps current levels and mute for surviving devices.
     func refreshDevices() {
         let built = DeviceDiscovery.buildInitialState()
         applier = built.applier
-        speakers = built.speakers
-        displays = built.displays
+        speakers = Self.mergeSpeakers(current: speakers, discovered: built.speakers)
+        displays = Self.mergeDisplays(current: displays, discovered: built.displays)
         applyAll()
+    }
+
+    static func mergeSpeakers(current: [SpeakerDevice], discovered: [SpeakerDevice]) -> [SpeakerDevice] {
+        discovered.map { d in
+            guard let old = current.first(where: { $0.id == d.id }) else { return d }
+            var m = d
+            m.volume = old.volume
+            m.muted = old.muted
+            return m
+        }
+    }
+    static func mergeDisplays(current: [DisplayDevice], discovered: [DisplayDevice]) -> [DisplayDevice] {
+        discovered.map { d in
+            guard let old = current.first(where: { $0.id == d.id }) else { return d }
+            var m = d
+            m.brightness = old.brightness
+            return m
+        }
     }
 
     // Equalize: absolute set for every enabled device.
@@ -106,15 +132,26 @@ final class AppState: ObservableObject {
     }
 
     func toggleMuteAll() {
-        let enabled = speakers.filter { isEnabled($0.id) }
-        let anyUnmuted = enabled.contains { !$0.muted }
+        let anyUnmuted = speakers.contains { isEnabled($0.id) && !$0.muted }
         for i in speakers.indices where isEnabled(speakers[i].id) {
-            speakers[i].muted = anyUnmuted; applyMute(speakers[i])
+            speakers[i].muted = anyUnmuted
+            // Mute bit for backends that have one, then the volume write:
+            // 0 when muting, the restored effective level when unmuting.
+            applier.applyMute(speakers[i])
+            apply(speakers[i])
         }
         persist()
     }
 
-    func persist() { Persistence.saveVolumes(speakers, brightness: displays) }
+    // Debounced: slider drags call this on every tick.
+    func persist() {
+        persistWork?.cancel()
+        let speakers = self.speakers
+        let displays = self.displays
+        let work = DispatchWorkItem { Persistence.saveVolumes(speakers, brightness: displays) }
+        persistWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+    }
 
     func applyAll() {
         for s in speakers { apply(s) }

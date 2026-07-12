@@ -95,7 +95,77 @@ struct AppStateTests {
 final class RecordingApplier: DeviceApplier {
     var volumes: [String: Double] = [:]
     var brightnesses: [String: Double] = [:]
+    var mutes: [String: Bool] = [:]
     func applyVolume(_ device: SpeakerDevice) { volumes[device.id] = device.volume }
-    func applyMute(_ device: SpeakerDevice) {}
+    func applyMute(_ device: SpeakerDevice) { mutes[device.id] = device.muted }
     func applyBrightness(_ device: DisplayDevice) { brightnesses[device.id] = device.brightness }
+}
+
+@MainActor
+struct MuteAndRefreshTests {
+    private func makeScaled() -> (AppState, RecordingApplier) {
+        let rec = RecordingApplier()
+        let s = AppState(applier: rec)
+        s.speakers = [
+            SpeakerDevice(id: "mac", name: "Mac", backend: .coreAudio(0), volume: 0.4, muted: false),
+            SpeakerDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), volume: 0.4, muted: false)
+        ]
+        s.volumeScale = { $0 == "lg" ? 0.8 : 1.0 }
+        return (s, rec)
+    }
+
+    // Mute writes 0; volume changes while muted stay silent; unmute
+    // restores the scaled level instead of leaving hardware at 0.
+    @Test func unmuteRestoresScaledVolume() {
+        let (s, rec) = makeScaled()
+        s.toggleMuteAll()
+        #expect(rec.volumes["mac"] == 0.0)
+        #expect(rec.mutes["mac"] == true)
+
+        s.nudgeAllVolume(0.1)
+        #expect(rec.volumes["mac"] == 0.0)
+        #expect(rec.volumes["lg"] == 0.0)
+
+        s.toggleMuteAll()
+        #expect(rec.mutes["mac"] == false)
+        #expect(abs((rec.volumes["mac"] ?? 0) - 0.5) < 0.0001)
+        #expect(abs((rec.volumes["lg"] ?? 0) - 0.4) < 0.0001)
+    }
+
+    // Device refresh must not discard current levels or mute state for
+    // devices that are still present.
+    @Test func mergePreservesExistingState() {
+        let current = [
+            SpeakerDevice(id: "a", name: "A", backend: .coreAudio(1), volume: 0.7, muted: true),
+            SpeakerDevice(id: "gone", name: "Gone", backend: .coreAudio(2), volume: 0.5, muted: false)
+        ]
+        let discovered = [
+            SpeakerDevice(id: "a", name: "A", backend: .coreAudio(9), volume: 0.3, muted: false),
+            SpeakerDevice(id: "new", name: "New", backend: .coreAudio(3), volume: 0.3, muted: false)
+        ]
+        let merged = AppState.mergeSpeakers(current: current, discovered: discovered)
+        #expect(merged.count == 2)
+        #expect(merged[0].volume == 0.7)
+        #expect(merged[0].muted == true)
+        if case .coreAudio(let id) = merged[0].backend { #expect(id == 9) } else { Issue.record("backend not updated") }
+        #expect(merged[1].id == "new")
+        #expect(merged[1].volume == 0.3)
+    }
+
+    @Test func mergePreservesDisplayBrightness() {
+        let current = [DisplayDevice(id: "d", name: "D", backend: .builtin, brightness: 0.9)]
+        let discovered = [DisplayDevice(id: "d", name: "D", backend: .builtin, brightness: 0.7)]
+        let merged = AppState.mergeDisplays(current: current, discovered: discovered)
+        #expect(merged[0].brightness == 0.9)
+    }
+
+    // HUD mute state must consider enabled speakers only.
+    @Test func muteStateIgnoresDisabledSpeakers() {
+        let (s, _) = makeScaled()
+        s.isEnabled = { $0 != "lg" }
+        s.toggleMuteAll()
+        #expect(s.enabledSpeakersMuted == true)
+        s.toggleMuteAll()
+        #expect(s.enabledSpeakersMuted == false)
+    }
 }

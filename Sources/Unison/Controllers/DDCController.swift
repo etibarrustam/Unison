@@ -7,13 +7,22 @@ struct DDCDisplay: Identifiable {
     let name: String
     // IOAVServiceRef imports into Swift as IOAVService (CF Ref suffix dropped).
     let service: IOAVService
+    // Matches the display to its NSScreen; nil when the registry lacks it.
+    let edidUUID: String?
 }
 
+@MainActor
 final class DDCController {
     static let vcpBrightness: UInt8 = 0x10
     static let vcpVolume: UInt8 = 0x62
     private let i2cChip: UInt32 = 0x37
     private let subAddress: UInt32 = 0x51
+
+    // Slider drags fire faster than the DDC bus likes; coalesce writes to
+    // one per interval per display with a trailing write for the final value.
+    private let minWriteInterval: TimeInterval = 0.04
+    private var lastWriteAt: [String: Date] = [:]
+    private var pendingWrite: [String: DispatchWorkItem] = [:]
 
     // Find external displays exposed as DCPAVServiceProxy with Location == External.
     func discover() -> [DDCDisplay] {
@@ -33,18 +42,19 @@ final class DDCController {
             guard location == "External" else { continue }
             guard let av = IOAVServiceCreateWithService(kCFAllocatorDefault, service) else { continue }
             index += 1
-            result.append(DDCDisplay(id: "ext-\(index)", name: "External Display \(index)", service: av))
+            result.append(DDCDisplay(id: "ext-\(index)", name: "External Display \(index)",
+                                     service: av, edidUUID: edidUUID(service)))
         }
         IOObjectRelease(iterator)
         return result
     }
 
     func setBrightness(_ d: DDCDisplay, percent: Int) {
-        write(d, DDCMessage.setVCP(Self.vcpBrightness, scaled(percent)))
+        throttledWrite(d, key: "\(d.id).b", DDCMessage.setVCP(Self.vcpBrightness, scaled(percent)))
     }
 
     func setVolume(_ d: DDCDisplay, percent: Int) {
-        write(d, DDCMessage.setVCP(Self.vcpVolume, scaled(percent)))
+        throttledWrite(d, key: "\(d.id).v", DDCMessage.setVCP(Self.vcpVolume, scaled(percent)))
     }
 
     // Best-effort: retry a few times; success if any read parses for this code.
@@ -62,8 +72,49 @@ final class DDCController {
         return false
     }
 
+    // Walk up the registry for the EDID UUID that ties this AV service to
+    // a CGDisplay.
+    private func edidUUID(_ service: io_service_t) -> String? {
+        var entry = service
+        IOObjectRetain(entry)
+        defer { IOObjectRelease(entry) }
+        for _ in 0..<8 {
+            if let s = IORegistryEntryCreateCFProperty(
+                entry, "EDID UUID" as CFString, kCFAllocatorDefault, 0
+            )?.takeRetainedValue() as? String {
+                return s.uppercased()
+            }
+            var parent = io_service_t()
+            guard IORegistryEntryGetParentEntry(entry, kIOServicePlane, &parent) == KERN_SUCCESS else {
+                return nil
+            }
+            IOObjectRelease(entry)
+            entry = parent
+        }
+        return nil
+    }
+
     private func scaled(_ percent: Int) -> UInt16 {
         UInt16(min(100, max(0, percent)))
+    }
+
+    private func throttledWrite(_ d: DDCDisplay, key: String, _ bytes: [UInt8]) {
+        pendingWrite[key]?.cancel()
+        let now = Date()
+        if let last = lastWriteAt[key], now.timeIntervalSince(last) < minWriteInterval {
+            let work = DispatchWorkItem { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.lastWriteAt[key] = Date()
+                    self.write(d, bytes)
+                }
+            }
+            pendingWrite[key] = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + minWriteInterval, execute: work)
+        } else {
+            lastWriteAt[key] = now
+            write(d, bytes)
+        }
     }
 
     private func write(_ d: DDCDisplay, _ bytes: [UInt8]) {

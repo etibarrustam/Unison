@@ -111,9 +111,15 @@ final class AudioController {
             mSelector: kAudioDevicePropertyVolumeScalar,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain)
-        if AudioObjectHasProperty(id, &addr) { return true }
-        addr.mElement = 1
-        return AudioObjectHasProperty(id, &addr)
+        // Existence is not enough: some devices expose a read-only volume.
+        for element: AudioObjectPropertyElement in [kAudioObjectPropertyElementMain, 1] {
+            addr.mElement = element
+            guard AudioObjectHasProperty(id, &addr) else { continue }
+            var settable: DarwinBoolean = false
+            AudioObjectIsPropertySettable(id, &addr, &settable)
+            if settable.boolValue { return true }
+        }
+        return false
     }
 
     private func setScalar(_ id: AudioDeviceID, element: AudioObjectPropertyElement, _ v: inout Float32) -> Bool {

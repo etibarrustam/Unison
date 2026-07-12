@@ -129,14 +129,12 @@ struct UnisonApp: App {
                     state.nudgeAllVolume(delta)
                     shown = state.speakers.first?.volume ?? 0
                 }
-                if settings.hudVolume { HUDOverlay.show(.volume, value: shown) }
-                else { SystemOSD.show(.volume, value: shown) }
+                LevelHUD.show(.volume, value: shown, custom: settings.hudVolume)
             case .mute:
                 state.toggleMuteAll()
-                let muted = state.speakers.allSatisfy(\.muted)
+                let muted = state.enabledSpeakersMuted
                 let v = muted ? 0 : state.speakers.first?.volume ?? 0
-                if settings.hudVolume { HUDOverlay.show(.mute, value: v) }
-                else { SystemOSD.show(.mute, value: v) }
+                LevelHUD.show(.mute, value: v, custom: settings.hudVolume)
             case .brightnessUp, .brightnessDown:
                 let delta = key == .brightnessUp ? step : -step
                 let shown: Double
@@ -151,8 +149,7 @@ struct UnisonApp: App {
                     state.nudgeAllBrightness(delta)
                     shown = state.displays.first?.brightness ?? 0
                 }
-                if settings.hudBrightness { HUDOverlay.show(.brightness, value: shown) }
-                else { SystemOSD.show(.brightness, value: shown) }
+                LevelHUD.show(.brightness, value: shown, custom: settings.hudBrightness)
             }
         }
         let started = keyboard.start()

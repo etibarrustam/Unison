@@ -1,11 +1,22 @@
 import AppKit
 import SwiftUI
 
+enum OverlayKind { case volume, brightness, mute }
+
+// Routes key-press feedback to the custom pill or the native bezel.
+@MainActor
+enum LevelHUD {
+    static func show(_ kind: OverlayKind, value: Double, custom: Bool) {
+        if custom { HUDOverlay.show(kind, value: value) }
+        else { SystemOSD.show(kind, value: value) }
+    }
+}
+
 // Custom level HUD styled after the macOS Tahoe banner. The native OSD
 // ignores the fill value on Tahoe, so we draw our own.
 @MainActor
 enum HUDOverlay {
-    enum Kind { case volume, brightness, mute }
+    typealias Kind = OverlayKind
 
     private static var panel: NSPanel?
     private static var hideWork: DispatchWorkItem?
