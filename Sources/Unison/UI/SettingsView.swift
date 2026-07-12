@@ -46,9 +46,9 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(state.speakers) { s in
                             deviceRow(id: s.id, name: s.name,
-                                      trim: volumeTrimBinding(s.id))
+                                      scale: volumeScaleBinding(s.id))
                         }
-                        Text("Adjustment shifts a device's real output. Bars in the menu keep showing the shared level.")
+                        Text("Max output caps a device relative to the rest. Zero stays zero for everyone; a device at 80% tracks the shared level but tops out at 80%.")
                             .font(.caption).foregroundStyle(.secondary)
                     }.padding(6)
                 }
@@ -56,7 +56,7 @@ struct SettingsView: View {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(state.displays) { d in
                             deviceRow(id: d.id, name: d.name,
-                                      trim: brightnessTrimBinding(d.id))
+                                      scale: brightnessScaleBinding(d.id))
                         }
                     }.padding(6)
                 }
@@ -68,21 +68,21 @@ struct SettingsView: View {
         .frame(width: 680, height: 420)
     }
 
-    private func deviceRow(id: String, name: String, trim: Binding<Double>) -> some View {
+    private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Toggle(name, isOn: enabledBinding(id))
                 Spacer()
-                Text(trimLabel(trim.wrappedValue))
+                Text(scaleLabel(scale.wrappedValue))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
-            Slider(value: trim, in: -0.5...0.5)
+            Slider(value: scale, in: 0.1...1.0)
         }
     }
 
-    private func trimLabel(_ v: Double) -> String {
+    private func scaleLabel(_ v: Double) -> String {
         let pct = Int((v * 100).rounded())
-        return pct == 0 ? "no adjustment" : (pct > 0 ? "+\(pct)%" : "\(pct)%")
+        return pct >= 100 ? "full output" : "max output \(pct)%"
     }
 
     private func enabledBinding(_ id: String) -> Binding<Bool> {
@@ -90,13 +90,13 @@ struct SettingsView: View {
                 set: { settings.setEnabled(id, $0) })
     }
 
-    private func volumeTrimBinding(_ id: String) -> Binding<Double> {
-        Binding(get: { settings.volumeTrims[id] ?? 0 },
-                set: { settings.volumeTrims[id] = $0; state.reapplyVolume(id: id) })
+    private func volumeScaleBinding(_ id: String) -> Binding<Double> {
+        Binding(get: { settings.volumeScales[id] ?? 1 },
+                set: { settings.volumeScales[id] = $0; state.reapplyVolume(id: id) })
     }
 
-    private func brightnessTrimBinding(_ id: String) -> Binding<Double> {
-        Binding(get: { settings.brightnessTrims[id] ?? 0 },
-                set: { settings.brightnessTrims[id] = $0; state.reapplyBrightness(id: id) })
+    private func brightnessScaleBinding(_ id: String) -> Binding<Double> {
+        Binding(get: { settings.brightnessScales[id] ?? 1 },
+                set: { settings.brightnessScales[id] = $0; state.reapplyBrightness(id: id) })
     }
 }

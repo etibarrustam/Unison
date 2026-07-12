@@ -13,13 +13,18 @@ enum DeviceDiscovery {
         let saved = Persistence.load()
         let names = screenNames()
 
-        // Speakers: built-in Mac speakers via CoreAudio + each DDC display that supports volume.
+        // Speakers: every real CoreAudio output with software volume
+        // (built-in, headphones, USB, Bluetooth) + each DDC display that
+        // supports volume. Virtual and aggregate devices are skipped: the
+        // Multi-Output Device is controlled through its members, not itself.
         // A monitor's speakers go over DDC; CoreAudio cannot set their volume.
         var speakers: [SpeakerDevice] = []
-        if let mac = audio.outputDevices().first(where: { $0.supportsSoftwareVolume && $0.name.contains("MacBook") }) {
-            speakers.append(SpeakerDevice(id: "mac", name: mac.name,
-                backend: .coreAudio(mac.id),
-                volume: saved["vol.mac"] ?? 0.3, muted: false))
+        for out in audio.outputDevices()
+        where out.supportsSoftwareVolume && !out.isVirtualOrAggregate {
+            let key = "spk-ca-\(out.uid)"
+            speakers.append(SpeakerDevice(id: key, name: out.name,
+                backend: .coreAudio(out.id),
+                volume: saved["vol.\(key)"] ?? 0.3, muted: false))
         }
         for (i, d) in ddcList.enumerated() where ddc.probe(d, code: DDCController.vcpVolume) {
             speakers.append(SpeakerDevice(id: "spk-\(d.id)", name: names.external(i, fallback: d.name),

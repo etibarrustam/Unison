@@ -23,26 +23,27 @@ final class AppState: ObservableObject {
     // Group operations skip devices for which this returns false.
     var isEnabled: (String) -> Bool = { _ in true }
 
-    // Per-device hardware trim: shown level stays uniform, output shifts.
-    var volumeTrim: (String) -> Double = { _ in 0 }
-    var brightnessTrim: (String) -> Double = { _ in 0 }
+    // Per-device output scale: hardware = level * scale, so zero stays
+    // zero and a scaled device tracks proportionally below the others.
+    var volumeScale: (String) -> Double = { _ in 1 }
+    var brightnessScale: (String) -> Double = { _ in 1 }
 
     init(applier: DeviceApplier) { self.applier = applier }
 
-    // All hardware writes pass through here so trims always apply.
+    // All hardware writes pass through here so scales always apply.
     private func apply(_ s: SpeakerDevice) {
         var t = s
-        t.volume = LevelMath.clamp(s.volume + volumeTrim(s.id))
+        t.volume = LevelMath.clamp(s.volume * volumeScale(s.id))
         applier.applyVolume(t)
     }
     private func apply(_ d: DisplayDevice) {
         var t = d
-        t.brightness = LevelMath.clamp(d.brightness + brightnessTrim(d.id))
+        t.brightness = LevelMath.clamp(d.brightness * brightnessScale(d.id))
         applier.applyBrightness(t)
     }
     private func applyMute(_ s: SpeakerDevice) {
         var t = s
-        t.volume = LevelMath.clamp(s.volume + volumeTrim(s.id))
+        t.volume = LevelMath.clamp(s.volume * volumeScale(s.id))
         applier.applyMute(t)
     }
 

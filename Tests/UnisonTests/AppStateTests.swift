@@ -57,8 +57,10 @@ struct AppStateTests {
         #expect(s.speakers.map(\.volume) == [0.5, 0.5])
     }
 
-    // Per-device trims shift the hardware value, not the shown level.
-    @Test func trimsApplyToHardwareOnly() {
+    // Per-device scales shape the hardware value, not the shown level.
+    // hardware = level * scale: zero stays zero for everyone, and at full
+    // level a scaled-down device tops out at its scale.
+    @Test func scalesApplyProportionally() {
         let rec = RecordingApplier()
         let s = AppState(applier: rec)
         s.speakers = [
@@ -68,21 +70,25 @@ struct AppStateTests {
         s.displays = [
             DisplayDevice(id: "builtin", name: "Built-in", backend: .builtin, brightness: 0.5)
         ]
-        s.volumeTrim = { $0 == "mac" ? 0.2 : 0 }
-        s.brightnessTrim = { _ in -0.1 }
+        s.volumeScale = { $0 == "lg" ? 0.8 : 1.0 }
+        s.brightnessScale = { _ in 0.6 }
 
         s.setAllVolume(0.5)
         #expect(s.speakers.map(\.volume) == [0.5, 0.5])
-        #expect(abs((rec.volumes["mac"] ?? 0) - 0.7) < 0.0001)
-        #expect(abs((rec.volumes["lg"] ?? 0) - 0.5) < 0.0001)
+        #expect(abs((rec.volumes["mac"] ?? 0) - 0.5) < 0.0001)
+        #expect(abs((rec.volumes["lg"] ?? 0) - 0.4) < 0.0001)
+
+        s.setAllVolume(0)
+        #expect(rec.volumes["mac"] == 0.0)
+        #expect(rec.volumes["lg"] == 0.0)
+
+        s.setAllVolume(1.0)
+        #expect(rec.volumes["mac"] == 1.0)
+        #expect(abs((rec.volumes["lg"] ?? 0) - 0.8) < 0.0001)
 
         s.setAllBrightness(0.5)
         #expect(s.displays[0].brightness == 0.5)
-        #expect(abs((rec.brightnesses["builtin"] ?? 0) - 0.4) < 0.0001)
-
-        // Trims clamp at the hardware bounds.
-        s.setVolume(id: "mac", 0.95)
-        #expect(rec.volumes["mac"] == 1.0)
+        #expect(abs((rec.brightnesses["builtin"] ?? 0) - 0.3) < 0.0001)
     }
 }
 

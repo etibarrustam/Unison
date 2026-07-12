@@ -3,8 +3,10 @@ import CoreAudio
 
 struct AudioOutput: Identifiable {
     let id: AudioDeviceID
+    let uid: String            // stable across reboots and replugs
     let name: String
     let supportsSoftwareVolume: Bool
+    let isVirtualOrAggregate: Bool
 }
 
 final class AudioController {
@@ -13,8 +15,13 @@ final class AudioController {
     func outputDevices() -> [AudioOutput] {
         deviceIDs().compactMap { id in
             guard channelCount(id, scope: kAudioDevicePropertyScopeOutput) > 0 else { return nil }
-            return AudioOutput(id: id, name: name(id),
-                               supportsSoftwareVolume: hasSettableVolume(id))
+            let t = transportType(id)
+            let virtualOrAggregate = t == kAudioDeviceTransportTypeVirtual
+                || t == kAudioDeviceTransportTypeAggregate
+                || t == kAudioDeviceTransportTypeAutoAggregate
+            return AudioOutput(id: id, uid: uid(id), name: name(id),
+                               supportsSoftwareVolume: hasSettableVolume(id),
+                               isVirtualOrAggregate: virtualOrAggregate)
         }
     }
 
@@ -47,6 +54,29 @@ final class AudioController {
         var ids = [AudioDeviceID](repeating: 0, count: count)
         AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &ids)
         return ids
+    }
+
+    private func uid(_ id: AudioDeviceID) -> String {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        var cf: Unmanaged<CFString>?
+        let status = AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &cf)
+        guard status == noErr, let cf else { return "dev-\(id)" }
+        return cf.takeRetainedValue() as String
+    }
+
+    private func transportType(_ id: AudioDeviceID) -> UInt32 {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var t: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &t)
+        return t
     }
 
     private func name(_ id: AudioDeviceID) -> String {

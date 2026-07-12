@@ -35,20 +35,20 @@ final class Settings: ObservableObject {
         }
     }
 
-    // Per-device hardware trims in -0.5...0.5. The popover shows uniform
-    // levels; these shift what actually reaches each device.
-    var volumeTrims: [String: Double] {
-        willSet { if newValue != volumeTrims { objectWillChange.send() } }
+    // Per-device output scales in 0.1...1.0 (1 = full output). The popover
+    // shows uniform levels; hardware receives level * scale.
+    var volumeScales: [String: Double] {
+        willSet { if newValue != volumeScales { objectWillChange.send() } }
         didSet {
-            guard volumeTrims != oldValue else { return }
-            UserDefaults.standard.set(volumeTrims, forKey: "unison.volumeTrims")
+            guard volumeScales != oldValue else { return }
+            UserDefaults.standard.set(volumeScales, forKey: "unison.volumeScales")
         }
     }
-    var brightnessTrims: [String: Double] {
-        willSet { if newValue != brightnessTrims { objectWillChange.send() } }
+    var brightnessScales: [String: Double] {
+        willSet { if newValue != brightnessScales { objectWillChange.send() } }
         didSet {
-            guard brightnessTrims != oldValue else { return }
-            UserDefaults.standard.set(brightnessTrims, forKey: "unison.brightnessTrims")
+            guard brightnessScales != oldValue else { return }
+            UserDefaults.standard.set(brightnessScales, forKey: "unison.brightnessScales")
         }
     }
 
@@ -56,8 +56,8 @@ final class Settings: ObservableObject {
         launchAtLogin = SMAppService.mainApp.status == .enabled
         let saved = UserDefaults.standard.stringArray(forKey: "unison.disabledDevices") ?? []
         disabledDevices = Set(saved)
-        volumeTrims = UserDefaults.standard.dictionary(forKey: "unison.volumeTrims") as? [String: Double] ?? [:]
-        brightnessTrims = UserDefaults.standard.dictionary(forKey: "unison.brightnessTrims") as? [String: Double] ?? [:]
+        volumeScales = UserDefaults.standard.dictionary(forKey: "unison.volumeScales") as? [String: Double] ?? [:]
+        brightnessScales = UserDefaults.standard.dictionary(forKey: "unison.brightnessScales") as? [String: Double] ?? [:]
     }
 
     func isEnabled(_ id: String) -> Bool { !disabledDevices.contains(id) }

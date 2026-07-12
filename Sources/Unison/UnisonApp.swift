@@ -16,8 +16,8 @@ struct UnisonApp: App {
         let cfg = Settings()
         _settings = StateObject(wrappedValue: cfg)
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
-        s.volumeTrim = { [weak cfg] id in cfg?.volumeTrims[id] ?? 0 }
-        s.brightnessTrim = { [weak cfg] id in cfg?.brightnessTrims[id] ?? 0 }
+        s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
+        s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
         startKeyboard(s, cfg)
     }
 
