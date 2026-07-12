@@ -37,4 +37,23 @@ struct AppStateTests {
         #expect(s.speakers[0].volume == 0.9)
         #expect(s.speakers[1].volume == 0.6)
     }
+
+    // Disabled devices are skipped by group operations.
+    @Test func disabledDeviceUntouched() {
+        let s = makeState()
+        s.isEnabled = { $0 != "lg" }
+        s.nudgeAllVolume(0.1)
+        s.setAllBrightness(0.9)
+        #expect(abs(s.speakers[0].volume - 0.5) < 0.0001)
+        #expect(s.speakers[1].volume == 0.6)
+        #expect(s.displays[0].brightness == 0.9)
+        #expect(s.displays[1].brightness == 0.8)
+    }
+
+    // Equalize flattens the group to one value.
+    @Test func equalizeSetsAllEqual() {
+        let s = makeState()
+        s.setAllVolume(0.5)
+        #expect(s.speakers.map(\.volume) == [0.5, 0.5])
+    }
 }

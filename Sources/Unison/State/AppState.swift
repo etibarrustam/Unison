@@ -20,6 +20,9 @@ final class AppState: ObservableObject {
 
     private var applier: DeviceApplier
 
+    // Group operations skip devices for which this returns false.
+    var isEnabled: (String) -> Bool = { _ in true }
+
     init(applier: DeviceApplier) { self.applier = applier }
 
     // Re-discovers hardware; replaces the applier so stale DDC refs are dropped.
@@ -31,15 +34,19 @@ final class AppState: ObservableObject {
         applyAll()
     }
 
-    // Sliders: absolute set.
+    // Equalize: absolute set for every enabled device.
     func setAllVolume(_ v: Double) {
         let c = LevelMath.clamp(v)
-        for i in speakers.indices { speakers[i].volume = c; applier.applyVolume(speakers[i]) }
+        for i in speakers.indices where isEnabled(speakers[i].id) {
+            speakers[i].volume = c; applier.applyVolume(speakers[i])
+        }
         persist()
     }
     func setAllBrightness(_ v: Double) {
         let c = LevelMath.clamp(v)
-        for i in displays.indices { displays[i].brightness = c; applier.applyBrightness(displays[i]) }
+        for i in displays.indices where isEnabled(displays[i].id) {
+            displays[i].brightness = c; applier.applyBrightness(displays[i])
+        }
         persist()
     }
     func setVolume(id: String, _ v: Double) {
@@ -53,16 +60,16 @@ final class AppState: ObservableObject {
         persist()
     }
 
-    // Keyboard: relative nudge to all, preserving balance.
+    // Keyboard and All sliders: relative nudge, preserving balance.
     func nudgeAllVolume(_ delta: Double) {
-        for i in speakers.indices {
+        for i in speakers.indices where isEnabled(speakers[i].id) {
             speakers[i].volume = LevelMath.step(speakers[i].volume, by: delta)
             applier.applyVolume(speakers[i])
         }
         persist()
     }
     func nudgeAllBrightness(_ delta: Double) {
-        for i in displays.indices {
+        for i in displays.indices where isEnabled(displays[i].id) {
             displays[i].brightness = LevelMath.step(displays[i].brightness, by: delta)
             applier.applyBrightness(displays[i])
         }
@@ -70,8 +77,11 @@ final class AppState: ObservableObject {
     }
 
     func toggleMuteAll() {
-        let anyUnmuted = speakers.contains { !$0.muted }
-        for i in speakers.indices { speakers[i].muted = anyUnmuted; applier.applyMute(speakers[i]) }
+        let enabled = speakers.filter { isEnabled($0.id) }
+        let anyUnmuted = enabled.contains { !$0.muted }
+        for i in speakers.indices where isEnabled(speakers[i].id) {
+            speakers[i].muted = anyUnmuted; applier.applyMute(speakers[i])
+        }
         persist()
     }
 
