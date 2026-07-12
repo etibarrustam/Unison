@@ -12,12 +12,12 @@ struct HardwareApplier: DeviceApplier {
     func applyVolume(_ device: SpeakerDevice) {
         switch device.backend {
         case .coreAudio(let id):
-            audio.setVolume(id, device.volume, position: device.position)
+            audio.setVolume(id, device.volume, pan: device.pan)
         case .ddc(let key):
             guard let d = ddcDisplays[key] else { return }
             ddc.setVolume(d, percent: Int((device.volume * 100).rounded()))
             if let max = ddcBalanceMax[key] {
-                ddc.setBalance(d, position: device.position, max: max)
+                ddc.setBalance(d, pan: device.pan, max: max)
             }
         }
     }

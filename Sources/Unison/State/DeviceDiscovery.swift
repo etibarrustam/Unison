@@ -30,12 +30,14 @@ enum DeviceDiscovery {
             let ident = screens.match(d, index: i)
             let key = "spk-\(ident.key)"
             guard cachedProbe(ddc, d, code: DDCController.vcpVolume, cacheKey: key) else { continue }
-            let balMax = cachedBalanceMax(ddc, d, cacheKey: key)
-            if let balMax { balanceMax[d.id] = balMax }
+            // Write-only philosophy: balance is sent regardless; a probe
+            // only refines the value range. Firmware without balance
+            // ignores the command.
+            balanceMax[d.id] = cachedBalanceMax(ddc, d, cacheKey: key) ?? 100
             speakers.append(SpeakerDevice(id: key, name: ident.name,
                 backend: .ddc(d.id),
                 volume: saved["vol.\(key)"] ?? 0.3, muted: false,
-                pannable: balMax != nil))
+                pannable: true))
         }
 
         // Displays: built-in panel plus DDC monitors with brightness.

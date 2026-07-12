@@ -96,10 +96,10 @@ final class RecordingApplier: DeviceApplier {
     var volumes: [String: Double] = [:]
     var brightnesses: [String: Double] = [:]
     var mutes: [String: Bool] = [:]
-    var positions: [String: SpeakerPosition] = [:]
+    var pans: [String: Double] = [:]
     func applyVolume(_ device: SpeakerDevice) {
         volumes[device.id] = device.volume
-        positions[device.id] = device.position
+        pans[device.id] = device.pan
     }
     func applyMute(_ device: SpeakerDevice) { mutes[device.id] = device.muted }
     func applyBrightness(_ device: DisplayDevice) { brightnesses[device.id] = device.brightness }
@@ -166,17 +166,17 @@ struct MuteAndRefreshTests {
     // Speaker positions reach the applier only while placement is on.
     @Test func positionsApplyOnlyWhenSpatialEnabled() {
         let (s, rec) = makeScaled()
-        s.speakerPosition = { $0 == "mac" ? .right : .left }
+        s.speakerPan = { $0 == "mac" ? 0.9 : 0.1 }
 
         s.spatialEnabled = { false }
         s.setAllVolume(0.5)
-        #expect(rec.positions["mac"] == .center)
-        #expect(rec.positions["lg"] == .center)
+        #expect(rec.pans["mac"] == 0.5)
+        #expect(rec.pans["lg"] == 0.5)
 
         s.spatialEnabled = { true }
         s.setAllVolume(0.5)
-        #expect(rec.positions["mac"] == .right)
-        #expect(rec.positions["lg"] == .left)
+        #expect(rec.pans["mac"] == 0.9)
+        #expect(rec.pans["lg"] == 0.1)
     }
 
     // HUD mute state must consider enabled speakers only.

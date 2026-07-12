@@ -25,18 +25,19 @@ final class AudioController {
         }
     }
 
-    func setVolume(_ id: AudioDeviceID, _ value: Double, position: SpeakerPosition = .center) {
+    func setVolume(_ id: AudioDeviceID, _ value: Double, pan: Double = 0.5) {
         var v = Float32(min(1, max(0, value)))
         if supportsPan(id) {
-            setPan(id, position)
+            setPan(id, pan)
             if setScalar(id, element: kAudioObjectPropertyElementMain, &v) { return }
             for ch: UInt32 in 1...2 { _ = setScalar(id, element: ch, &v) }
             return
         }
         // No pan property: shape per-channel gains when positioned.
-        var left = Float32(position == .right ? 0 : v)
-        var right = Float32(position == .left ? 0 : v)
-        if position != .center, hasChannelVolumes(id) {
+        if pan != 0.5, hasChannelVolumes(id) {
+            let g = LevelMath.channelGains(volume: Double(v), pan: pan)
+            var left = Float32(g.left)
+            var right = Float32(g.right)
             _ = setScalar(id, element: 1, &left)
             _ = setScalar(id, element: 2, &right)
             return
@@ -66,17 +67,12 @@ final class AudioController {
         return AudioObjectHasProperty(id, &addr)
     }
 
-    private func setPan(_ id: AudioDeviceID, _ position: SpeakerPosition) {
+    private func setPan(_ id: AudioDeviceID, _ pan: Double) {
         var addr = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyStereoPan,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: kAudioObjectPropertyElementMain)
-        var v: Float32
-        switch position {
-        case .left: v = 0
-        case .center: v = 0.5
-        case .right: v = 1
-        }
+        var v = Float32(LevelMath.clamp(pan))
         _ = AudioObjectSetPropertyData(id, &addr, 0, nil, UInt32(MemoryLayout<Float32>.size), &v)
     }
 

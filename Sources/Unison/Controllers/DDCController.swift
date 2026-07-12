@@ -59,13 +59,8 @@ final class DDCController {
     }
 
     // Balance semantics per MCCS: midpoint is centered, low favors left.
-    func setBalance(_ d: DDCDisplay, position: SpeakerPosition, max: Int) {
-        let value: Int
-        switch position {
-        case .left: value = 0
-        case .center: value = max / 2
-        case .right: value = max
-        }
+    func setBalance(_ d: DDCDisplay, pan: Double, max: Int) {
+        let value = Int((LevelMath.clamp(pan) * Double(max)).rounded())
         throttledWrite(d, key: "\(d.id).bal", DDCMessage.setVCP(Self.vcpBalance, UInt16(clamping: value)))
     }
 

@@ -57,21 +57,19 @@ final class Settings: ObservableObject {
         }
     }
 
-    // Speaker positions for stereo placement, raw values of SpeakerPosition.
-    var speakerPositions: [String: String] {
-        willSet { if newValue != speakerPositions { objectWillChange.send() } }
+    // Stereo positions, 0 left...1 right, 0.5 center.
+    var speakerPans: [String: Double] {
+        willSet { if newValue != speakerPans { objectWillChange.send() } }
         didSet {
-            guard speakerPositions != oldValue else { return }
-            UserDefaults.standard.set(speakerPositions, forKey: "unison.speakerPositions")
+            guard speakerPans != oldValue else { return }
+            UserDefaults.standard.set(speakerPans, forKey: "unison.speakerPans")
         }
     }
 
-    func position(_ id: String) -> SpeakerPosition {
-        SpeakerPosition(rawValue: speakerPositions[id] ?? "center") ?? .center
-    }
+    func pan(_ id: String) -> Double { speakerPans[id] ?? 0.5 }
 
     init() {
-        speakerPositions = UserDefaults.standard.dictionary(forKey: "unison.speakerPositions") as? [String: String] ?? [:]
+        speakerPans = UserDefaults.standard.dictionary(forKey: "unison.speakerPans") as? [String: Double] ?? [:]
         menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled
         let saved = UserDefaults.standard.stringArray(forKey: "unison.disabledDevices") ?? []

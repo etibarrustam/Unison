@@ -57,8 +57,8 @@ struct SettingsView: View {
                             }
                         }
                         HStack {
-                            Toggle("Speaker placement", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Match speakers to where they physically sit. A Left speaker plays only left-channel sound, Right only right-channel, Center plays both, so stereo and 8D audio image correctly across devices. Shown only for speakers whose hardware supports it; for monitors without it, set the balance once in the monitor's own menu.")
+                            Toggle("Stereo positions", isOn: $settings.spatialEnabled)
+                            InfoButton(text: "Place each speaker where it physically sits, from full left to full right. A speaker on the left plays mostly left-channel sound, so stereo and 8D audio image correctly across all devices. Works anywhere on the axis, including devices behind you placed rear-left or rear-right. Monitors receive a balance command; if a monitor ignores it, set balance once in its own menu.")
                         }
                         .onChange(of: settings.spatialEnabled) { _, _ in state.applyAll() }
                     }.padding(6)
@@ -110,16 +110,24 @@ struct SettingsView: View {
     }
 
     private func positionRow(_ id: String) -> some View {
-        Picker("Position", selection: Binding(
-            get: { settings.position(id).rawValue },
-            set: { settings.speakerPositions[id] = $0; state.reapplyVolume(id: id) }
-        )) {
-            Text("Left").tag("left")
-            Text("Center").tag("center")
-            Text("Right").tag("right")
+        HStack(spacing: 8) {
+            Text("L").font(.caption).foregroundStyle(.secondary)
+            Slider(value: Binding(
+                get: { settings.pan(id) },
+                set: { settings.speakerPans[id] = $0; state.reapplyVolume(id: id) }
+            ), in: 0...1)
+            Text("R").font(.caption).foregroundStyle(.secondary)
+            Text(panLabel(settings.pan(id)))
+                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                .frame(width: 64, alignment: .trailing)
         }
-        .pickerStyle(.segmented)
         .padding(.leading, 20)
+    }
+
+    private func panLabel(_ p: Double) -> String {
+        let pct = Int(((p - 0.5) * 200).rounded())
+        if pct == 0 { return "center" }
+        return pct < 0 ? "\(-pct)% left" : "\(pct)% right"
     }
 
     private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {
