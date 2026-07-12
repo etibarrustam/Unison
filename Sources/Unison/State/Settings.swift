@@ -5,6 +5,7 @@ import ServiceManagement
 final class Settings: ObservableObject {
     @AppStorage("unison.stepSize") var stepSize: Double = 0.0625
     @AppStorage("unison.keyboardTarget") var keyboardTarget: String = "all"
+    @AppStorage("unison.keyboardBrightnessTarget") var keyboardBrightnessTarget: String = "all"
     @AppStorage("unison.hudVolume") var hudVolume: Bool = true
     @AppStorage("unison.hudBrightness") var hudBrightness: Bool = true
 

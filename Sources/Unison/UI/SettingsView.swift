@@ -28,6 +28,10 @@ struct SettingsView: View {
                             Text("All devices").tag("all")
                             ForEach(state.speakers) { Text($0.name).tag($0.id) }
                         }
+                        Picker("Brightness keys control", selection: $settings.keyboardBrightnessTarget) {
+                            Text("All displays").tag("all")
+                            ForEach(state.displays) { Text($0.name).tag($0.id) }
+                        }
                         Text("Step size: \(Int(settings.stepSize * 100))%")
                         Slider(value: $settings.stepSize, in: 0.02...0.25)
                     }.padding(6)

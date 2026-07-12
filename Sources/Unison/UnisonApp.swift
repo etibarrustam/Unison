@@ -48,16 +48,21 @@ struct UnisonApp: App {
                 if settings.hudVolume {
                     HUDOverlay.show(.mute, value: muted ? 0 : state.speakers.first?.volume ?? 0)
                 }
-            case .brightnessUp:
-                state.nudgeAllBrightness(step)
-                if settings.hudBrightness {
-                    HUDOverlay.show(.brightness, value: state.displays.first?.brightness ?? 0)
+            case .brightnessUp, .brightnessDown:
+                let delta = key == .brightnessUp ? step : -step
+                let shown: Double
+                if settings.keyboardBrightnessTarget == "all" {
+                    state.nudgeAllBrightness(delta)
+                    shown = state.displays.first?.brightness ?? 0
+                } else if let d = state.displays.first(where: { $0.id == settings.keyboardBrightnessTarget }) {
+                    let v = LevelMath.step(d.brightness, by: delta)
+                    state.setBrightness(id: d.id, v)
+                    shown = v
+                } else {
+                    state.nudgeAllBrightness(delta)
+                    shown = state.displays.first?.brightness ?? 0
                 }
-            case .brightnessDown:
-                state.nudgeAllBrightness(-step)
-                if settings.hudBrightness {
-                    HUDOverlay.show(.brightness, value: state.displays.first?.brightness ?? 0)
-                }
+                if settings.hudBrightness { HUDOverlay.show(.brightness, value: shown) }
             }
         }
         let started = keyboard.start()
