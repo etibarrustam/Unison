@@ -18,8 +18,10 @@ struct SettingsView: View {
                 }
                 GroupBox("Overlay") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Show volume overlay", isOn: $settings.hudVolume)
-                        Toggle("Show brightness overlay", isOn: $settings.hudBrightness)
+                        Toggle("Custom volume overlay", isOn: $settings.hudVolume)
+                        Toggle("Custom brightness overlay", isOn: $settings.hudBrightness)
+                        Text("Off uses the macOS bezel. Its level bar does not update on macOS Tahoe; only the custom overlay can show the real level.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }.padding(6)
                 }
                 GroupBox("Keyboard") {
