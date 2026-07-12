@@ -13,10 +13,14 @@ final class Settings: ObservableObject {
     // rewrites its isInserted binding on every scene evaluation, and an
     // unconditional objectWillChange would loop the view graph forever.
 
-    // Not persisted across launches: with no Dock icon, a hidden menu bar
-    // icon would leave no way back in. Relaunching restores it.
-    var menuIconVisible: Bool = true {
+    // Persisted. Recovery from a hidden icon: opening the app again fires
+    // the reopen handler, which turns the icon back on.
+    var menuIconVisible: Bool {
         willSet { if newValue != menuIconVisible { objectWillChange.send() } }
+        didSet {
+            guard menuIconVisible != oldValue else { return }
+            UserDefaults.standard.set(menuIconVisible, forKey: "unison.menuIconVisible")
+        }
     }
 
     var disabledDevices: Set<String> {
@@ -53,6 +57,7 @@ final class Settings: ObservableObject {
     }
 
     init() {
+        menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled
         let saved = UserDefaults.standard.stringArray(forKey: "unison.disabledDevices") ?? []
         disabledDevices = Set(saved)

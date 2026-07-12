@@ -1,7 +1,20 @@
 import SwiftUI
 
+// Restores the menu bar icon when the app is opened while already running.
+// This is the recovery path for a hidden icon in a Dock-less app.
+final class ReopenHandler: NSObject, NSApplicationDelegate {
+    @MainActor static weak var settings: Settings?
+
+    @MainActor
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        Self.settings?.menuIconVisible = true
+        return false
+    }
+}
+
 @main
 struct UnisonApp: App {
+    @NSApplicationDelegateAdaptor(ReopenHandler.self) private var reopenHandler
     @StateObject private var state: AppState
     @StateObject private var settings: Settings
     private let keyboard = KeyboardTap()
@@ -16,6 +29,7 @@ struct UnisonApp: App {
         _state = StateObject(wrappedValue: s)
         let cfg = Settings()
         _settings = StateObject(wrappedValue: cfg)
+        ReopenHandler.settings = cfg
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
