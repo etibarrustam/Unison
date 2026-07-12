@@ -51,6 +51,7 @@ struct PopoverView: View {
         Divider()
         HStack {
             Button("Settings") { NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) }
+            Button("Refresh Devices") { state.refreshDevices() }
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }.padding(.horizontal).padding(.bottom, 8)

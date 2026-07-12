@@ -10,6 +10,7 @@ struct UnisonApp: App {
         let s = AppState(applier: built.applier)
         s.speakers = built.speakers
         s.displays = built.displays
+        s.applyAll()  // hardware matches stored levels on launch
         _state = StateObject(wrappedValue: s)
         startKeyboard(s)
     }
