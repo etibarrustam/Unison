@@ -10,31 +10,34 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 GroupBox("General") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Launch at login", isOn: $settings.launchAtLogin)
-                        Toggle("Show menu bar icon", isOn: $settings.menuIconVisible)
-                        Text("A hidden icon comes back when Unison is relaunched.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        row(Toggle("Launch at login", isOn: $settings.launchAtLogin),
+                            info: "Starts Unison automatically when you log in, so keyboard control works from the first key press.")
+                        row(Toggle("Show menu bar icon", isOn: $settings.menuIconVisible),
+                            info: "Hides the slider icon in the menu bar. The icon always comes back when Unison is relaunched, so you cannot lock yourself out.")
                     }.padding(6)
                 }
                 GroupBox("Overlay") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Toggle("Custom volume overlay", isOn: $settings.hudVolume)
-                        Toggle("Custom brightness overlay", isOn: $settings.hudBrightness)
-                        Text("Off uses the macOS bezel. Its level bar does not update on macOS Tahoe; only the custom overlay can show the real level.")
-                            .font(.caption).foregroundStyle(.secondary)
+                        row(Toggle("Custom volume overlay", isOn: $settings.hudVolume),
+                            info: "Shows Unison's overlay with an accurate level bar when you press volume keys. Off uses the macOS bezel instead; on macOS Tahoe the system bezel cannot display the real level.")
+                        row(Toggle("Custom brightness overlay", isOn: $settings.hudBrightness),
+                            info: "Same as the volume overlay, for the brightness keys.")
                     }.padding(6)
                 }
                 GroupBox("Keyboard") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Picker("Volume keys control", selection: $settings.keyboardTarget) {
+                        row(Picker("Volume keys control", selection: $settings.keyboardTarget) {
                             Text("All devices").tag("all")
                             ForEach(state.speakers) { Text($0.name).tag($0.id) }
-                        }
-                        Picker("Brightness keys control", selection: $settings.keyboardBrightnessTarget) {
+                        }, info: "Which speakers the volume keys change. All devices moves everything together and keeps your balance; a single device leaves the others untouched.")
+                        row(Picker("Brightness keys control", selection: $settings.keyboardBrightnessTarget) {
                             Text("All displays").tag("all")
                             ForEach(state.displays) { Text($0.name).tag($0.id) }
+                        }, info: "Which displays the brightness keys change.")
+                        HStack {
+                            Text("Step size: \(Int(settings.stepSize * 100))%")
+                            InfoButton(text: "How much one key press changes the level. macOS uses about 6%.")
                         }
-                        Text("Step size: \(Int(settings.stepSize * 100))%")
                         Slider(value: $settings.stepSize, in: 0.02...0.25)
                     }.padding(6)
                 }
@@ -44,30 +47,46 @@ struct SettingsView: View {
 
             // Right: devices with balance adjustments
             VStack(alignment: .leading, spacing: 14) {
-                GroupBox("Speakers") {
+                GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(state.speakers) { s in
                             deviceRow(id: s.id, name: s.name,
                                       scale: volumeScaleBinding(s.id))
                         }
-                        Text("Max output caps a device relative to the rest. Zero stays zero for everyone; a device at 80% tracks the shared level but tops out at 80%.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }.padding(6)
+                } label: {
+                    HStack {
+                        Text("Speakers")
+                        InfoButton(text: "Untick a device to remove it from the menu and from group control; its level stays where it was. Max output caps a device relative to the rest: zero stays zero for everyone, levels rise together, and a device at 80% always sits below the others. Use it to keep one speaker quieter or one display dimmer at any volume.")
+                    }
                 }
-                GroupBox("Displays") {
+                GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         ForEach(state.displays) { d in
                             deviceRow(id: d.id, name: d.name,
                                       scale: brightnessScaleBinding(d.id))
                         }
                     }.padding(6)
+                } label: {
+                    HStack {
+                        Text("Displays")
+                        InfoButton(text: "Works like the speaker settings: untick to exclude a display, and use max output to keep one display dimmer than the other at every brightness level.")
+                    }
                 }
                 Spacer()
             }
             .frame(width: 340)
         }
         .padding(20)
-        .frame(width: 680, height: 420)
+        .frame(width: 680, height: 440)
+    }
+
+    private func row(_ content: some View, info: String) -> some View {
+        HStack(spacing: 6) {
+            content
+            InfoButton(text: info)
+            Spacer(minLength: 0)
+        }
     }
 
     private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {

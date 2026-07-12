@@ -4,6 +4,7 @@ struct PopoverView: View {
     @ObservedObject var state: AppState
     @ObservedObject var settings: Settings
     @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     private var enabledDisplays: [DisplayDevice] {
         state.displays.filter { settings.isEnabled($0.id) }
@@ -56,6 +57,10 @@ struct PopoverView: View {
                 openSettings()
             }
             Button("Refresh Devices") { state.refreshDevices() }
+            Button("Help") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "help")
+            }
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
         }.padding(.horizontal).padding(.bottom, 8)

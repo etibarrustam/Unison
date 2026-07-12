@@ -81,5 +81,10 @@ struct UnisonApp: App {
         SwiftUI.Settings {
             SettingsView(settings: settings, state: state)
         }
+
+        Window("Unison Help", id: "help") {
+            HelpView()
+        }
+        .windowResizability(.contentSize)
     }
 }
