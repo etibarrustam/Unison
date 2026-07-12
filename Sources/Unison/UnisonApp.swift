@@ -13,9 +13,14 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Single instance: hand off to the running copy and exit.
         let bundleID = Bundle.main.bundleIdentifier ?? "com.unison.app"
+        // isTerminated filter: a just-killed predecessor can linger in the
+        // list and must not make the fresh instance defer to a corpse.
         let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier }
+            .filter { $0.processIdentifier != ProcessInfo.processInfo.processIdentifier
+                      && !$0.isTerminated }
+        NSLog("Unison: didFinishLaunching pid=\(ProcessInfo.processInfo.processIdentifier) others=\(others.map { "\($0.processIdentifier):term=\($0.isTerminated)" })")
         if !others.isEmpty {
+            NSLog("Unison: deferring to existing instance, exiting")
             DistributedNotificationCenter.default().postNotificationName(
                 Self.reopenNote, object: nil, userInfo: nil, deliverImmediately: true)
             NSApp.terminate(nil)
@@ -35,16 +40,21 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
 
     @MainActor
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if Self.settings?.menuIconVisible == false {
-            Self.presentRecovery()
-        }
+        NSLog("Unison: reopen event received")
+        Self.presentRecovery()
         return false
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        NSLog("Unison: applicationShouldTerminate called")
+        return .terminateNow
     }
 
     @MainActor private static var sharedRecoveryWindow: NSWindow?
 
     @MainActor
     static func presentRecovery() {
+        NSLog("Unison: presentRecovery")
         guard let settings, let state else { return }
         let w = sharedRecoveryWindow ?? {
             let w = NSWindow(contentViewController:
