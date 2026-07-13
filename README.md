@@ -1,3 +1,5 @@
+<p align="center"><img src="Assets/logo.svg" width="140" alt="Unison logo"></p>
+
 # Unison
 
 Unison is a macOS menu bar app that plays your sound through every speaker you have at the same time, and controls the volume and brightness of all your devices together from the keyboard.
