@@ -135,7 +135,6 @@ struct UnisonApp: App {
             }
         }
         watcher.start()
-        spatial.restoreIfStranded()
         // The engine always runs: it is what plays sound through every
         // device at once. Stereo positions only changes the mix.
         _ = spatial.start(positions: cfg.spatialEnabled ? cfg.spatialPositions : nil,

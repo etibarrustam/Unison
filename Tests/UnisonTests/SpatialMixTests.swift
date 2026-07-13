@@ -2,31 +2,31 @@ import Testing
 @testable import Unison
 
 struct SpatialMixTests {
-    // Two devices, two channels each, ordered LG then MacBook in the
+    // Two devices, two channels each, ordered a monitor then a laptop in the
     // aggregate. Positions spread left to right.
     @Test func matrixMapsChannelsWithGains() {
         let speakers = [
-            SpatialSpeaker(deviceUID: "lg", channel: 1, name: "LG Left", position: 0.0),
-            SpatialSpeaker(deviceUID: "lg", channel: 2, name: "LG Right", position: 0.25),
-            SpatialSpeaker(deviceUID: "mac", channel: 1, name: "Mac Left", position: 0.75),
-            SpatialSpeaker(deviceUID: "mac", channel: 2, name: "Mac Right", position: 1.0)
+            SpatialSpeaker(deviceUID: "mon", channel: 1, name: "Monitor Left", position: 0.0),
+            SpatialSpeaker(deviceUID: "mon", channel: 2, name: "Monitor Right", position: 0.25),
+            SpatialSpeaker(deviceUID: "lap", channel: 1, name: "Laptop Left", position: 0.75),
+            SpatialSpeaker(deviceUID: "lap", channel: 2, name: "Laptop Right", position: 1.0)
         ]
         let matrix = SpatialMix.matrix(
             speakers: speakers,
-            deviceOrder: ["lg", "mac"],
-            channelCounts: ["lg": 2, "mac": 2],
-            outputOffset: 2)  // aggregate channels 0-1 belong to BlackHole
+            deviceOrder: ["mon", "lap"],
+            channelCounts: ["mon": 2, "lap": 2],
+            outputOffset: 2)  // leading channels reserved by the caller stay silent
 
-        // LG Left is aggregate channel 2 (0-based): pure left content.
+        // Monitor Left is aggregate channel 2 (0-based): pure left content.
         #expect(abs(matrix[2]!.l - 1.0) < 0.0001)
         #expect(matrix[2]!.r == 0)
-        // LG Right at 0.25: 2:1 left to right, normalized to unity sum.
+        // Monitor Right at 0.25: 2:1 left to right, normalized to unity sum.
         #expect(abs(matrix[3]!.l - 2.0 / 3.0) < 0.0001)
         #expect(abs(matrix[3]!.r - 1.0 / 3.0) < 0.0001)
-        // Mac Left at 0.75: 1:2 left to right, normalized to unity sum.
+        // Laptop Left at 0.75: 1:2 left to right, normalized to unity sum.
         #expect(abs(matrix[4]!.l - 1.0 / 3.0) < 0.0001)
         #expect(abs(matrix[4]!.r - 2.0 / 3.0) < 0.0001)
-        // Mac Right: pure right content.
+        // Laptop Right: pure right content.
         #expect(matrix[5]!.l == 0)
         #expect(abs(matrix[5]!.r - 1.0) < 0.0001)
     }

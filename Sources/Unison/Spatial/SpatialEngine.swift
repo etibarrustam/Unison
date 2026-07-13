@@ -117,7 +117,6 @@ struct SpatialOutputDevice: Identifiable {
 @MainActor
 final class SpatialEngine: ObservableObject {
     static let aggregateUID = "com.unison.spatial.aggregate"
-    private static let prevOutputKey = "unison.spatial.prevOutput"
 
     private let state = SpatialRenderState()
     private var aggregateID = AudioDeviceID(0)
@@ -260,24 +259,6 @@ final class SpatialEngine: ObservableObject {
         }
     }
 
-    // Migration from the loopback era: releases before this one switched
-    // the default output to BlackHole or our aggregate and remembered the
-    // way back. Put the user's device back once, then forget the key.
-    func restoreIfStranded() {
-        guard !isRunning else { return }
-        let currentUID = uid(systemDefaultOutput())
-        if let stale = deviceID(uidContains: Self.aggregateUID) {
-            AudioHardwareDestroyAggregateDevice(stale)
-        }
-        guard let prevUID = UserDefaults.standard.string(forKey: Self.prevOutputKey) else { return }
-        UserDefaults.standard.removeObject(forKey: Self.prevOutputKey)
-        if let currentUID, currentUID.contains("BlackHole") || currentUID == Self.aggregateUID,
-           let id = deviceID(uidContains: prevUID) {
-            setSystemDefaultOutput(id)
-            NSLog("Unison: restored output stranded on loopback")
-        }
-    }
-
     func applyMix(positions: [String: Double]?) {
         let speakers = availableSpeakers().map { s in
             var m = s
@@ -411,20 +392,4 @@ final class SpatialEngine: ObservableObject {
         return cf.takeRetainedValue() as String
     }
 
-    private func systemDefaultOutput() -> AudioDeviceID {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var id = AudioDeviceID(0)
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &id)
-        return id
-    }
-
-    private func setSystemDefaultOutput(_ id: AudioDeviceID) {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var v = id
-        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil,
-                                   UInt32(MemoryLayout<AudioDeviceID>.size), &v)
-    }
 }

@@ -7,11 +7,11 @@ struct AppStateTests {
         let s = AppState(applier: NullApplier())
         s.speakers = [
             SpeakerDevice(id: "mac", name: "Mac", backend: .coreAudio(0), volume: 0.4, muted: false),
-            SpeakerDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), volume: 0.6, muted: false)
+            SpeakerDevice(id: "mon", name: "Monitor", backend: .ddc("ext-1"), volume: 0.6, muted: false)
         ]
         s.displays = [
             DisplayDevice(id: "builtin", name: "Built-in", backend: .builtin, brightness: 0.5),
-            DisplayDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), brightness: 0.8)
+            DisplayDevice(id: "mon", name: "Monitor", backend: .ddc("ext-1"), brightness: 0.8)
         ]
         return s
     }
@@ -41,7 +41,7 @@ struct AppStateTests {
     // Disabled devices are skipped by group operations.
     @Test func disabledDeviceUntouched() {
         let s = makeState()
-        s.isEnabled = { $0 != "lg" }
+        s.isEnabled = { $0 != "mon" }
         s.nudgeAllVolume(0.1)
         s.setAllBrightness(0.9)
         #expect(abs(s.speakers[0].volume - 0.5) < 0.0001)
@@ -65,26 +65,26 @@ struct AppStateTests {
         let s = AppState(applier: rec)
         s.speakers = [
             SpeakerDevice(id: "mac", name: "Mac", backend: .coreAudio(0), volume: 0.4, muted: false),
-            SpeakerDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), volume: 0.4, muted: false)
+            SpeakerDevice(id: "mon", name: "Monitor", backend: .ddc("ext-1"), volume: 0.4, muted: false)
         ]
         s.displays = [
             DisplayDevice(id: "builtin", name: "Built-in", backend: .builtin, brightness: 0.5)
         ]
-        s.volumeScale = { $0 == "lg" ? 0.8 : 1.0 }
+        s.volumeScale = { $0 == "mon" ? 0.8 : 1.0 }
         s.brightnessScale = { _ in 0.6 }
 
         s.setAllVolume(0.5)
         #expect(s.speakers.map(\.volume) == [0.5, 0.5])
         #expect(abs((rec.volumes["mac"] ?? 0) - 0.5) < 0.0001)
-        #expect(abs((rec.volumes["lg"] ?? 0) - 0.4) < 0.0001)
+        #expect(abs((rec.volumes["mon"] ?? 0) - 0.4) < 0.0001)
 
         s.setAllVolume(0)
         #expect(rec.volumes["mac"] == 0.0)
-        #expect(rec.volumes["lg"] == 0.0)
+        #expect(rec.volumes["mon"] == 0.0)
 
         s.setAllVolume(1.0)
         #expect(rec.volumes["mac"] == 1.0)
-        #expect(abs((rec.volumes["lg"] ?? 0) - 0.8) < 0.0001)
+        #expect(abs((rec.volumes["mon"] ?? 0) - 0.8) < 0.0001)
 
         s.setAllBrightness(0.5)
         #expect(s.displays[0].brightness == 0.5)
@@ -112,9 +112,9 @@ struct MuteAndRefreshTests {
         let s = AppState(applier: rec)
         s.speakers = [
             SpeakerDevice(id: "mac", name: "Mac", backend: .coreAudio(0), volume: 0.4, muted: false),
-            SpeakerDevice(id: "lg", name: "LG", backend: .ddc("ext-1"), volume: 0.4, muted: false)
+            SpeakerDevice(id: "mon", name: "Monitor", backend: .ddc("ext-1"), volume: 0.4, muted: false)
         ]
-        s.volumeScale = { $0 == "lg" ? 0.8 : 1.0 }
+        s.volumeScale = { $0 == "mon" ? 0.8 : 1.0 }
         return (s, rec)
     }
 
@@ -128,12 +128,12 @@ struct MuteAndRefreshTests {
 
         s.nudgeAllVolume(0.1)
         #expect(rec.volumes["mac"] == 0.0)
-        #expect(rec.volumes["lg"] == 0.0)
+        #expect(rec.volumes["mon"] == 0.0)
 
         s.toggleMuteAll()
         #expect(rec.mutes["mac"] == false)
         #expect(abs((rec.volumes["mac"] ?? 0) - 0.5) < 0.0001)
-        #expect(abs((rec.volumes["lg"] ?? 0) - 0.4) < 0.0001)
+        #expect(abs((rec.volumes["mon"] ?? 0) - 0.4) < 0.0001)
     }
 
     // Device refresh must not discard current levels or mute state for
@@ -171,18 +171,18 @@ struct MuteAndRefreshTests {
         s.spatialEnabled = { false }
         s.setAllVolume(0.5)
         #expect(rec.pans["mac"] == 0.5)
-        #expect(rec.pans["lg"] == 0.5)
+        #expect(rec.pans["mon"] == 0.5)
 
         s.spatialEnabled = { true }
         s.setAllVolume(0.5)
         #expect(rec.pans["mac"] == 0.9)
-        #expect(rec.pans["lg"] == 0.1)
+        #expect(rec.pans["mon"] == 0.1)
     }
 
     // HUD mute state must consider enabled speakers only.
     @Test func muteStateIgnoresDisabledSpeakers() {
         let (s, _) = makeScaled()
-        s.isEnabled = { $0 != "lg" }
+        s.isEnabled = { $0 != "mon" }
         s.toggleMuteAll()
         #expect(s.enabledSpeakersMuted == true)
         s.toggleMuteAll()

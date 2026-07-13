@@ -8,7 +8,10 @@ struct HelpView: View {
                     "Unison controls the volume and brightness of everything connected to your Mac from one place: the built-in speakers and display, headphones, and external monitors. The volume and brightness keys move all devices together, and the menu bar panel adjusts each one individually.")
 
                 section("Why it exists",
-                    "When you play sound to several outputs at once (a Multi-Output Device, set up in Audio MIDI Setup), macOS disables the volume keys and greys out the volume slider. And monitors connected over HDMI or DisplayPort expose no volume or brightness control to macOS at all. Unison fills both gaps: it drives each speaker directly and talks to monitors over DDC/CI, the protocol monitors use for their on-screen menu settings.")
+                    "macOS plays sound to one output device at a time, and combining devices by hand in Audio MIDI Setup disables the volume keys. Monitors connected over HDMI or DisplayPort expose no volume or brightness control to macOS at all. Unison fills these gaps: it plays sound through every ticked device at once, drives each speaker directly, and talks to monitors over DDC/CI, the protocol monitors use for their on-screen menu settings.")
+
+                section("Playing through several devices",
+                    "Unison captures the sound your Mac plays, using the System Audio Recording permission, and redistributes it to every device ticked under Play through in Settings. This works no matter which output is selected in the sound settings. With Stereo positions on, each speaker can be placed where it physically sits, from full left to full right, and plays the matching part of the stereo field. With it off, every device keeps its natural stereo.")
 
                 section("Using a second display",
                     "External monitors appear automatically in both columns of the menu panel if they support DDC/CI (most do). Brightness works on nearly every monitor; volume only on monitors with speakers. If a monitor is missing, click Refresh Devices in the menu panel, and check it is connected directly rather than through a hub or KVM.")
@@ -23,7 +26,7 @@ struct HelpView: View {
                     "Key presses show a level overlay. Unison's own overlay displays the exact level; switching it off in Settings uses the standard macOS bezel instead, which on macOS Tahoe cannot show the real level.")
 
                 section("Notes",
-                    "Levels are remembered and restored on launch. Plug in headphones or a monitor, then use Refresh Devices to pick them up. Unison replaces tools like MonitorControl and Background Music for this workflow.")
+                    "Levels are remembered and restored on launch. Plug in headphones or a monitor and Unison picks them up automatically. Unison replaces tools like MonitorControl and Background Music for this workflow, and needs no audio driver.")
             }
             .padding(24)
             .frame(maxWidth: .infinity, alignment: .leading)
