@@ -7,6 +7,29 @@ struct SettingsView: View {
     var spatial: SpatialEngine? = nil
 
     var body: some View {
+        // Scrollable: with several devices the right column grows past any
+        // fixed height, and clipped content cannot be reached otherwise.
+        ScrollView(.vertical) {
+            columns
+                .padding(20)
+        }
+        .frame(width: 680)
+        .frame(minHeight: 420, idealHeight: 560, maxHeight: 720)
+        .onAppear {
+            // Device ids can change (replug, id scheme); a stale keyboard
+            // target would leave the picker blank and silently act as all.
+            if settings.keyboardTarget != "all",
+               !state.speakers.contains(where: { $0.id == settings.keyboardTarget }) {
+                settings.keyboardTarget = "all"
+            }
+            if settings.keyboardBrightnessTarget != "all",
+               !state.displays.contains(where: { $0.id == settings.keyboardBrightnessTarget }) {
+                settings.keyboardBrightnessTarget = "all"
+            }
+        }
+    }
+
+    private var columns: some View {
         HStack(alignment: .top, spacing: 20) {
             // Left: app behavior
             VStack(alignment: .leading, spacing: 14) {
@@ -43,7 +66,6 @@ struct SettingsView: View {
                         Slider(value: $settings.stepSize, in: 0.02...0.25)
                     }.padding(6)
                 }
-                Spacer()
             }
             .frame(width: 280)
 
@@ -60,20 +82,15 @@ struct SettingsView: View {
                         }
                         HStack {
                             Toggle("Stereo positions", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Works with any output selected in the sound settings; pick the devices it plays through right here, no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Works with any output selected in the sound settings; no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                         }
                         .onChange(of: settings.spatialEnabled) { _, on in
-                            if on {
-                                _ = spatial?.start(positions: settings.spatialPositions,
-                                                   excluded: settings.spatialExcluded)
-                            } else {
-                                spatial?.stop()
-                            }
+                            // The engine keeps playing through all devices
+                            // either way; the toggle only changes the mix.
+                            spatial?.applyMix(positions: on ? settings.spatialPositions : nil)
                             state.applyAll()
                         }
-                        if settings.spatialEnabled {
-                            spatialSection
-                        }
+                        spatialSection
                     }.padding(6)
                 } label: {
                     HStack {
@@ -94,23 +111,8 @@ struct SettingsView: View {
                         InfoButton(text: "Works like the speaker settings: untick to exclude a display, and use max output to keep one display dimmer than the other at every brightness level.")
                     }
                 }
-                Spacer()
             }
             .frame(width: 340)
-        }
-        .padding(20)
-        .frame(width: 680, height: 520)
-        .onAppear {
-            // Device ids can change (replug, id scheme); a stale keyboard
-            // target would leave the picker blank and silently act as all.
-            if settings.keyboardTarget != "all",
-               !state.speakers.contains(where: { $0.id == settings.keyboardTarget }) {
-                settings.keyboardTarget = "all"
-            }
-            if settings.keyboardBrightnessTarget != "all",
-               !state.displays.contains(where: { $0.id == settings.keyboardBrightnessTarget }) {
-                settings.keyboardBrightnessTarget = "all"
-            }
         }
     }
 
@@ -127,9 +129,11 @@ struct SettingsView: View {
         if let spatial {
             if spatial.isRunning {
                 Divider()
+                Text("Play through")
+                    .font(.caption).foregroundStyle(.secondary)
                 ForEach(spatial.outputDeviceList()) { dev in
                     Toggle(dev.name, isOn: spatialIncludedBinding(dev.uid))
-                    if !settings.spatialExcluded.contains(dev.uid) {
+                    if settings.spatialEnabled, !settings.spatialExcluded.contains(dev.uid) {
                         ForEach(spatial.availableSpeakers().filter { $0.deviceUID == dev.uid }) { sp in
                             spatialSliderRow(sp, spatial: spatial)
                         }
@@ -158,7 +162,7 @@ struct SettingsView: View {
                     get: { settings.spatialPositions[sp.id] ?? 0.5 },
                     set: {
                         settings.spatialPositions[sp.id] = $0
-                        spatial.updatePositions(settings.spatialPositions)
+                        spatial.applyMix(positions: settings.spatialPositions)
                     }
                 ), in: 0...1)
                 Text("R").font(.caption).foregroundStyle(.secondary)
@@ -175,7 +179,7 @@ struct SettingsView: View {
                 set: { on in
                     if on { settings.spatialExcluded.remove(uid) }
                     else { settings.spatialExcluded.insert(uid) }
-                    _ = spatial?.start(positions: settings.spatialPositions,
+                    _ = spatial?.start(positions: settings.spatialEnabled ? settings.spatialPositions : nil,
                                        excluded: settings.spatialExcluded)
                 })
     }

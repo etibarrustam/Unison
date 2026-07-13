@@ -118,27 +118,28 @@ struct UnisonApp: App {
         watcher.onChange = { [weak s, weak engine, weak cfg] in
             s?.refreshDevices()
             guard let engine, let cfg else { return }
+            let positions = cfg.spatialEnabled ? cfg.spatialPositions : nil
             if engine.isRunning {
                 // Rebuild only when a device really came or went; creating
                 // our own aggregate fires this notification too, and an
                 // unconditional restart loops forever.
                 if engine.realDevicesChanged() {
-                    _ = engine.start(positions: cfg.spatialPositions,
+                    _ = engine.start(positions: positions,
                                      excluded: cfg.spatialExcluded)
                 }
-            } else if cfg.spatialEnabled, !engine.captureDenied {
+            } else if !engine.captureDenied {
                 // A start that failed on a transient device state gets
                 // another chance when devices change.
-                _ = engine.start(positions: cfg.spatialPositions,
+                _ = engine.start(positions: positions,
                                  excluded: cfg.spatialExcluded)
             }
         }
         watcher.start()
         spatial.restoreIfStranded()
-        if cfg.spatialEnabled {
-            _ = spatial.start(positions: cfg.spatialPositions,
-                              excluded: cfg.spatialExcluded)
-        }
+        // The engine always runs: it is what plays sound through every
+        // device at once. Stereo positions only changes the mix.
+        _ = spatial.start(positions: cfg.spatialEnabled ? cfg.spatialPositions : nil,
+                          excluded: cfg.spatialExcluded)
     }
 
     private func startKeyboard(_ state: AppState, _ settings: Settings) {

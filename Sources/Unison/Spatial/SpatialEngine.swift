@@ -157,7 +157,10 @@ final class SpatialEngine: ObservableObject {
             || Dictionary(uniqueKeysWithValues: current.map { ($0.uid, $0.channels) }) != channelCounts
     }
 
-    func start(positions: [String: Double], excluded: Set<String>) -> Bool {
+    // positions nil means passthrough: no positioning, every device keeps
+    // its natural stereo. The engine runs either way, because it is the
+    // only path that plays through more than one device at once.
+    func start(positions: [String: Double]?, excluded: Set<String>) -> Bool {
         teardown()
         isRunning = false
         self.excluded = excluded
@@ -224,7 +227,7 @@ final class SpatialEngine: ObservableObject {
             return false
         }
 
-        updatePositions(positions)
+        applyMix(positions: positions)
         isRunning = true
         startDebugDump()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
@@ -275,10 +278,17 @@ final class SpatialEngine: ObservableObject {
         }
     }
 
-    func updatePositions(_ positions: [String: Double]) {
+    func applyMix(positions: [String: Double]?) {
         let speakers = availableSpeakers().map { s in
             var m = s
-            m.position = positions[s.id] ?? 0.5
+            if let positions {
+                m.position = positions[s.id] ?? 0.5
+            } else if channelCounts[s.deviceUID] == 2 {
+                // Passthrough: left channel plays left, right plays right.
+                m.position = s.channel == 1 ? 0 : 1
+            } else {
+                m.position = 0.5
+            }
             return m
         }
         state.setMatrix(SpatialMix.matrix(speakers: speakers,
