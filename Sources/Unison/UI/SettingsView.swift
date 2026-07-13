@@ -5,7 +5,6 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     @ObservedObject var state: AppState
     var spatial: SpatialEngine? = nil
-    @StateObject private var installer = DriverInstaller()
 
     var body: some View {
         HStack(alignment: .top, spacing: 20) {
@@ -61,7 +60,7 @@ struct SettingsView: View {
                         }
                         HStack {
                             Toggle("Stereo positions", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. While on, the system output is a combined device named Unison Spatial; pick the devices it plays through right here, no Audio MIDI Setup needed. Uses the BlackHole audio driver; without it, a simpler per-device balance is used where hardware allows.")
+                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Works with any output selected in the sound settings; pick the devices it plays through right here, no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                         }
                         .onChange(of: settings.spatialEnabled) { _, on in
                             if on {
@@ -136,34 +135,14 @@ struct SettingsView: View {
                         }
                     }
                 }
-            } else if spatial.blackHoleInstalled && !spatial.micAuthorized {
+            } else if spatial.captureDenied {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("macOS files reading the system audio stream under the microphone permission. Allow it for Unison; your microphone itself is never recorded.")
+                    Text("macOS blocked Unison from reading system audio. Allow Unison under System Audio Recording Only, then switch Stereo positions off and on.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Button("Open Microphone Privacy Settings") {
-                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                    Button("Open Privacy Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
                             NSWorkspace.shared.open(url)
                         }
-                    }
-                }
-            } else if !spatial.blackHoleInstalled {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Spatial mode needs a small free audio driver (BlackHole). One click, one password, done.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    switch installer.phase {
-                    case .idle:
-                        Button("Install Audio Driver") { installer.install() }
-                    case .downloading:
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text("Downloading...").font(.caption).foregroundStyle(.secondary)
-                        }
-                    case .launched:
-                        Text("Finish the installer window, then spatial mode starts by itself.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    case .failed(let message):
-                        Text(message).font(.caption).foregroundStyle(.red)
-                        Button("Install Audio Driver") { installer.install() }
                     }
                 }
             }

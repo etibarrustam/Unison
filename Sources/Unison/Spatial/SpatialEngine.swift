@@ -1,26 +1,21 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
-import AVFoundation
 import os
 
-// Shared with the realtime render callback. Only this box is touched from
-// the audio thread; gains swap under a lock held for nanoseconds.
+// Shared with the realtime IO block. Gains swap under a lock held for
+// nanoseconds; the diagnostics fields tear harmlessly.
 final class SpatialRenderState: @unchecked Sendable {
-    var unit: AudioUnit?
-    var inputABL: UnsafeMutableAudioBufferListPointer?
-    var maxFrames: Int = 4096
-    var totalOutputChannels: Int = 0
-    // Diagnostics, written by the render thread and read by the debug
-    // timer; tearing is acceptable there.
-    var cbCount: Int = 0
-    var inStatus: OSStatus = noErr
-    var inPeak: Float = 0
-    var outPeak: Float = 0
     private var lock = os_unfair_lock()
     // Dense per-output-channel gains; channels without a speaker stay 0.
     private var gainL = [Float](repeating: 0, count: 64)
     private var gainR = [Float](repeating: 0, count: 64)
+    // Diagnostics, written by the IO thread and read by the debug timer.
+    var cbCount: Int = 0
+    var inPeak: Float = 0
+    var outPeak: Float = 0
+    var inBufs: Int = 0
+    var inChans: Int = 0
 
     func setMatrix(_ matrix: [Int: (l: Double, r: Double)]) {
         var l = [Float](repeating: 0, count: 64)
@@ -41,52 +36,75 @@ final class SpatialRenderState: @unchecked Sendable {
         guard ch < 64 else { return (0, 0) }
         return (gainL[ch], gainR[ch])
     }
-}
 
-private func spatialRender(_ refCon: UnsafeMutableRawPointer,
-                           _ ioActionFlags: UnsafeMutablePointer<AudioUnitRenderActionFlags>,
-                           _ inTimeStamp: UnsafePointer<AudioTimeStamp>,
-                           _ inBusNumber: UInt32,
-                           _ inNumberFrames: UInt32,
-                           _ ioData: UnsafeMutablePointer<AudioBufferList>?) -> OSStatus {
-    let state = Unmanaged<SpatialRenderState>.fromOpaque(refCon).takeUnretainedValue()
-    guard let unit = state.unit, let ioData,
-          let inputABL = state.inputABL, inNumberFrames <= state.maxFrames else { return noErr }
+    // Runs on the HAL IO thread: mixes the tap's stereo input into every
+    // output channel by its gains. Buffers keep the devices' native
+    // interleaving, so channels are addressed with a stride.
+    func render(input: UnsafePointer<AudioBufferList>,
+                output: UnsafeMutablePointer<AudioBufferList>) {
+        cbCount += 1
+        let inABL = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
+        inBufs = inABL.count
+        inChans = inABL.first.map { Int($0.mNumberChannels) } ?? 0
+        var inL: UnsafeMutablePointer<Float32>?
+        var inR: UnsafeMutablePointer<Float32>?
+        var strideL = 1
+        var strideR = 1
+        var frames = 0
+        var seen = 0
+        for buf in inABL {
+            guard seen < 2, let data = buf.mData?.assumingMemoryBound(to: Float32.self) else { continue }
+            let ch = max(1, Int(buf.mNumberChannels))
+            for c in 0..<ch where seen < 2 {
+                if seen == 0 {
+                    inL = data + c
+                    strideL = ch
+                    frames = Int(buf.mDataByteSize) / (4 * ch)
+                } else {
+                    inR = data + c
+                    strideR = ch
+                }
+                seen += 1
+            }
+        }
 
-    // Reset the reusable input buffers to full capacity before rendering.
-    for i in 0..<inputABL.count {
-        inputABL[i].mDataByteSize = UInt32(state.maxFrames * MemoryLayout<Float32>.size)
-    }
-    let status = AudioUnitRender(unit, ioActionFlags, inTimeStamp, 1, inNumberFrames, inputABL.unsafeMutablePointer)
-    state.cbCount += 1
-    state.inStatus = status
-    let out = UnsafeMutableAudioBufferListPointer(ioData)
-    guard status == noErr, inputABL.count >= 2,
-          let inL = inputABL[0].mData?.assumingMemoryBound(to: Float32.self),
-          let inR = inputABL[1].mData?.assumingMemoryBound(to: Float32.self) else {
-        for i in 0..<out.count {
-            if let d = out[i].mData { memset(d, 0, Int(out[i].mDataByteSize)) }
+        let outABL = UnsafeMutableAudioBufferListPointer(output)
+        guard let l = inL, frames > 0 else {
+            for buf in outABL {
+                if let d = buf.mData { memset(d, 0, Int(buf.mDataByteSize)) }
+            }
+            return
         }
-        return noErr
-    }
+        let r = inR ?? l
+        for f in 0..<frames {
+            inPeak = max(inPeak, max(abs(l[f * strideL]), abs(r[f * strideR])))
+        }
 
-    let n = Int(inNumberFrames)
-    for f in 0..<n {
-        state.inPeak = max(state.inPeak, max(abs(inL[f]), abs(inR[f])))
-    }
-    for ch in 0..<out.count {
-        guard let d = out[ch].mData?.assumingMemoryBound(to: Float32.self) else { continue }
-        let (gl, gr) = state.gains(ch)
-        if gl == 0 && gr == 0 {
-            memset(d, 0, n * MemoryLayout<Float32>.size)
-            continue
+        var chIndex = 0
+        for buf in outABL {
+            let ch = max(1, Int(buf.mNumberChannels))
+            guard let data = buf.mData?.assumingMemoryBound(to: Float32.self) else {
+                chIndex += ch
+                continue
+            }
+            let bufFrames = Int(buf.mDataByteSize) / (4 * ch)
+            let n = min(frames, bufFrames)
+            for c in 0..<ch {
+                let (gl, gr) = gains(chIndex + c)
+                if gl == 0 && gr == 0 {
+                    for f in 0..<bufFrames { data[f * ch + c] = 0 }
+                    continue
+                }
+                for f in 0..<n {
+                    let v = gl * l[f * strideL] + gr * r[f * strideR]
+                    data[f * ch + c] = v
+                    outPeak = max(outPeak, abs(v))
+                }
+                for f in n..<bufFrames { data[f * ch + c] = 0 }
+            }
+            chIndex += ch
         }
-        for f in 0..<n {
-            d[f] = gl * inL[f] + gr * inR[f]
-            state.outPeak = max(state.outPeak, abs(d[f]))
-        }
     }
-    return noErr
 }
 
 // One entry per physical output device, for the membership toggles.
@@ -103,20 +121,16 @@ final class SpatialEngine: ObservableObject {
 
     private let state = SpatialRenderState()
     private var aggregateID = AudioDeviceID(0)
+    private var tapID = AudioObjectID(0)
+    private var procID: AudioDeviceIOProcID?
     @Published private(set) var isRunning = false
+    // True after a tap creation failure, which in practice means macOS
+    // denied the System Audio Recording permission.
+    @Published private(set) var captureDenied = false
     private var deviceOrder: [String] = []
     private var channelCounts: [String: Int] = [:]
     private var excluded: Set<String> = []
-    private var pinBlock: AudioObjectPropertyListenerBlock?
     private var debugTimer: Timer?
-
-    var blackHoleInstalled: Bool { deviceID(uidContains: "BlackHole") != nil }
-
-    // macOS files reading the loopback stream under the microphone
-    // permission; without it CoreAudio delivers silence, not an error.
-    var micAuthorized: Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
-    }
 
     // Every real output device, including excluded ones, so the settings
     // UI can offer re-inclusion.
@@ -124,7 +138,7 @@ final class SpatialEngine: ObservableObject {
         realOutputDevices().map { SpatialOutputDevice(uid: $0.uid, name: $0.name) }
     }
 
-    // Every channel of every included output device except the loopback.
+    // Every channel of every included output device.
     func availableSpeakers() -> [SpatialSpeaker] {
         includedOutputDevices().flatMap { dev in
             (1...dev.channels).map { ch in
@@ -144,37 +158,32 @@ final class SpatialEngine: ObservableObject {
     }
 
     func start(positions: [String: Double], excluded: Set<String>) -> Bool {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .authorized:
-            break
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                guard granted else { return }
-                Task { @MainActor [weak self] in
-                    guard let self, !self.isRunning else { return }
-                    _ = self.start(positions: positions, excluded: excluded)
-                }
-            }
-            return false
-        default:
-            NSLog("Unison: microphone permission denied, engine cannot read the loopback")
-            return false
-        }
-        let wasRunning = isRunning
         teardown()
         isRunning = false
         self.excluded = excluded
 
-        func fail() -> Bool {
-            if wasRunning { restorePreviousOutput() }
-            return false
-        }
-        guard let bhUID = deviceID(uidContains: "BlackHole").flatMap({ uid($0) }) else { return fail() }
         let devices = includedOutputDevices()
-        guard !devices.isEmpty else { return fail() }
-
+        guard !devices.isEmpty else { return false }
         deviceOrder = devices.map(\.uid)
         channelCounts = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0.channels) })
+
+        // Tap everything the system plays, mute it at its original
+        // destination, and exclude our own process so the re-rendered mix
+        // does not feed back into the tap. Reading the tap needs the
+        // System Audio Recording permission, not the microphone one.
+        let tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: [ownProcessObject()])
+        tapDesc.muteBehavior = .mutedWhenTapped
+        tapDesc.name = "Unison Spatial Tap"
+        tapDesc.isPrivate = true
+        var tap = AudioObjectID(0)
+        let tapStatus = AudioHardwareCreateProcessTap(tapDesc, &tap)
+        guard tapStatus == noErr, tap != 0 else {
+            captureDenied = true
+            NSLog("Unison: process tap creation failed (\(tapStatus))")
+            return false
+        }
+        captureDenied = false
+        tapID = tap
 
         // A public aggregate survives a crashed owner; a leftover with our
         // UID must go before a new one can take its place.
@@ -182,139 +191,87 @@ final class SpatialEngine: ObservableObject {
             AudioHardwareDestroyAggregateDevice(stale)
         }
 
-        // Aggregate: BlackHole first (clock master, loopback input), then
-        // all included outputs with drift compensation. Public, so it shows
-        // up in the sound settings and Audio MIDI Setup under our name.
-        var subs: [[String: Any]] = [[kAudioSubDeviceUIDKey as String: bhUID]]
-        for d in devices {
-            subs.append([kAudioSubDeviceUIDKey as String: d.uid,
-                         kAudioSubDeviceDriftCompensationKey as String: 1])
+        // Aggregate: all included outputs plus the tap as input. Private:
+        // a public aggregate cannot bind a private tap (no input streams
+        // appear), and nothing needs to select this device anyway; the
+        // tap hears system audio wherever it plays.
+        var subs: [[String: Any]] = []
+        for (i, d) in devices.enumerated() {
+            var sub: [String: Any] = [kAudioSubDeviceUIDKey as String: d.uid]
+            if i > 0 { sub[kAudioSubDeviceDriftCompensationKey as String] = 1 }
+            subs.append(sub)
         }
         let desc: [String: Any] = [
             kAudioAggregateDeviceNameKey as String: "Unison Spatial",
             kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
             kAudioAggregateDeviceSubDeviceListKey as String: subs,
-            kAudioAggregateDeviceMainSubDeviceKey as String: bhUID,
-            kAudioAggregateDeviceIsPrivateKey as String: 0,
+            kAudioAggregateDeviceMainSubDeviceKey as String: devices[0].uid,
+            kAudioAggregateDeviceTapListKey as String:
+                [[kAudioSubTapUIDKey as String: tapDesc.uuid.uuidString]],
+            kAudioAggregateDeviceIsPrivateKey as String: 1,
             kAudioAggregateDeviceIsStackedKey as String: 0
         ]
         var aggID = AudioDeviceID(0)
-        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else { return fail() }
+        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else {
+            teardown()
+            return false
+        }
         aggregateID = aggID
         usleep(150_000)  // aggregate needs a moment to publish streams
 
-        guard setupUnit(aggregate: aggID) else {
-            AudioHardwareDestroyAggregateDevice(aggID)
-            aggregateID = 0
-            return fail()
+        guard setupIOProc(aggID) else {
+            teardown()
+            return false
         }
 
         updatePositions(positions)
-
-        // Route the system to our aggregate. System stereo lands on its
-        // first two channels, which are the loopback. Remember the way
-        // back only when leaving a real device, so restarts cannot save
-        // the loopback as the place to return to.
-        if let currentUID = uid(systemDefaultOutput()),
-           !currentUID.contains("BlackHole"), currentUID != Self.aggregateUID {
-            UserDefaults.standard.set(currentUID, forKey: Self.prevOutputKey)
-        }
-        setSystemDefaultOutput(aggID)
         isRunning = true
-        pinDefaultOutput()
         startDebugDump()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
         return true
     }
 
-    // Hidden diagnostics: defaults write com.unison.app unison.spatialDebug
-    // -bool true, then read /tmp/unison-spatial.log.
-    private func startDebugDump() {
-        guard UserDefaults.standard.bool(forKey: "unison.spatialDebug") else { return }
-        let s = state
-        let order = deviceOrder
-        debugTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            let line = "\(Date()) cb=\(s.cbCount) inStatus=\(s.inStatus) inPeak=\(s.inPeak) outPeak=\(s.outPeak) outCh=\(s.totalOutputChannels) order=\(order)\n"
-            s.inPeak = 0
-            s.outPeak = 0
-            if let data = line.data(using: .utf8),
-               let fh = FileHandle(forWritingAtPath: "/tmp/unison-spatial.log") {
-                fh.seekToEndOfFile()
-                fh.write(data)
-                fh.closeFile()
-            } else {
-                try? line.write(toFile: "/tmp/unison-spatial.log", atomically: true, encoding: .utf8)
-            }
-        }
-    }
-
     func stop() {
         teardown()
         if isRunning {
-            restorePreviousOutput()
             isRunning = false
             NSLog("Unison: spatial engine stopped")
         }
     }
 
-    // The OS restores the last user-chosen output a few seconds after a
-    // new device appears; while spatial runs the aggregate must stay the
-    // default or audio silently bypasses the engine.
-    private func pinDefaultOutput() {
-        var addr = Self.defaultOutputAddress
-        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            MainActor.assumeIsolated {
-                guard let self, self.isRunning,
-                      self.systemDefaultOutput() != self.aggregateID else { return }
-                NSLog("Unison: default output moved away, re-pinning aggregate")
-                self.setSystemDefaultOutput(self.aggregateID)
-            }
-        }
-        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main, block)
-        pinBlock = block
-    }
-
-    private func unpinDefaultOutput() {
-        guard let block = pinBlock else { return }
-        var addr = Self.defaultOutputAddress
-        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main, block)
-        pinBlock = nil
-    }
-
-    private static let defaultOutputAddress = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-
     private func teardown() {
         debugTimer?.invalidate()
         debugTimer = nil
-        unpinDefaultOutput()
-        if let unit = state.unit {
-            AudioOutputUnitStop(unit)
-            AudioUnitUninitialize(unit)
-            AudioComponentInstanceDispose(unit)
-            state.unit = nil
+        if let procID, aggregateID != 0 {
+            AudioDeviceStop(aggregateID, procID)
+            AudioDeviceDestroyIOProcID(aggregateID, procID)
         }
+        procID = nil
         if aggregateID != 0 {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = 0
         }
+        if tapID != 0 {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = 0
+        }
     }
 
-    // Crash safety: if a previous run left the system on the loopback or
-    // on our aggregate, put it back even though no engine is running.
+    // Migration from the loopback era: releases before this one switched
+    // the default output to BlackHole or our aggregate and remembered the
+    // way back. Put the user's device back once, then forget the key.
     func restoreIfStranded() {
         guard !isRunning else { return }
         let currentUID = uid(systemDefaultOutput())
         if let stale = deviceID(uidContains: Self.aggregateUID) {
             AudioHardwareDestroyAggregateDevice(stale)
         }
-        guard UserDefaults.standard.string(forKey: Self.prevOutputKey) != nil else { return }
-        if let currentUID, currentUID.contains("BlackHole") || currentUID == Self.aggregateUID {
-            restorePreviousOutput()
+        guard let prevUID = UserDefaults.standard.string(forKey: Self.prevOutputKey) else { return }
+        UserDefaults.standard.removeObject(forKey: Self.prevOutputKey)
+        if let currentUID, currentUID.contains("BlackHole") || currentUID == Self.aggregateUID,
+           let id = deviceID(uidContains: prevUID) {
+            setSystemDefaultOutput(id)
             NSLog("Unison: restored output stranded on loopback")
-        } else {
-            UserDefaults.standard.removeObject(forKey: Self.prevOutputKey)
         }
     }
 
@@ -327,7 +284,28 @@ final class SpatialEngine: ObservableObject {
         state.setMatrix(SpatialMix.matrix(speakers: speakers,
                                           deviceOrder: deviceOrder,
                                           channelCounts: channelCounts,
-                                          outputOffset: 2))
+                                          outputOffset: 0))
+    }
+
+    // Hidden diagnostics: defaults write com.unison.app unison.spatialDebug
+    // -bool true, then read /tmp/unison-spatial.log.
+    private func startDebugDump() {
+        guard UserDefaults.standard.bool(forKey: "unison.spatialDebug") else { return }
+        let s = state
+        let order = deviceOrder
+        debugTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            let line = "\(Date()) cb=\(s.cbCount) inPeak=\(s.inPeak) outPeak=\(s.outPeak) inBufs=\(s.inBufs) inChans=\(s.inChans) order=\(order)\n"
+            s.inPeak = 0
+            s.outPeak = 0
+            if let data = line.data(using: .utf8),
+               let fh = FileHandle(forWritingAtPath: "/tmp/unison-spatial.log") {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            } else {
+                try? line.write(toFile: "/tmp/unison-spatial.log", atomically: true, encoding: .utf8)
+            }
+        }
     }
 
     // MARK: - CoreAudio plumbing
@@ -357,70 +335,37 @@ final class SpatialEngine: ObservableObject {
             .sorted { $0.uid < $1.uid }
     }
 
-    private func setupUnit(aggregate: AudioDeviceID) -> Bool {
-        var desc = AudioComponentDescription(
-            componentType: kAudioUnitType_Output,
-            componentSubType: kAudioUnitSubType_HALOutput,
-            componentManufacturer: kAudioUnitManufacturer_Apple,
-            componentFlags: 0, componentFlagsMask: 0)
-        guard let comp = AudioComponentFindNext(nil, &desc) else { return false }
-        var unitOpt: AudioUnit?
-        guard AudioComponentInstanceNew(comp, &unitOpt) == noErr, let unit = unitOpt else { return false }
-
-        var one: UInt32 = 1
-        guard AudioUnitSetProperty(unit, kAudioOutputUnitProperty_EnableIO,
-                                   kAudioUnitScope_Input, 1, &one, 4) == noErr else { return false }
-        var dev = aggregate
-        guard AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
-                                   kAudioUnitScope_Global, 0, &dev, UInt32(MemoryLayout<AudioDeviceID>.size)) == noErr
-        else { return false }
-
-        let totalOut = outputChannels(aggregate)
-        state.totalOutputChannels = totalOut
-
-        var rate = Float64(48000)
-        var ra = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
-            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
-        var rsize = UInt32(MemoryLayout<Float64>.size)
-        AudioObjectGetPropertyData(aggregate, &ra, 0, nil, &rsize, &rate)
-
-        func format(_ channels: UInt32) -> AudioStreamBasicDescription {
-            AudioStreamBasicDescription(
-                mSampleRate: rate,
-                mFormatID: kAudioFormatLinearPCM,
-                mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
-                mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4,
-                mChannelsPerFrame: channels, mBitsPerChannel: 32, mReserved: 0)
+    private func setupIOProc(_ agg: AudioDeviceID) -> Bool {
+        let s = state
+        var pid: AudioDeviceIOProcID?
+        // @Sendable: the block runs on the HAL IO thread and must not
+        // inherit this method's main-actor isolation, or the runtime
+        // isolation check traps on the first callback.
+        let block: AudioDeviceIOBlock = { @Sendable _, inData, _, outData, _ in
+            s.render(input: inData, output: outData)
         }
-        var inFmt = format(2)
-        guard AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
-                                   kAudioUnitScope_Output, 1, &inFmt,
-                                   UInt32(MemoryLayout<AudioStreamBasicDescription>.size)) == noErr else { return false }
-        var outFmt = format(UInt32(totalOut))
-        guard AudioUnitSetProperty(unit, kAudioUnitProperty_StreamFormat,
-                                   kAudioUnitScope_Input, 0, &outFmt,
-                                   UInt32(MemoryLayout<AudioStreamBasicDescription>.size)) == noErr else { return false }
-
-        // Reusable non-interleaved input buffers for the callback.
-        let abl = AudioBufferList.allocate(maximumBuffers: 2)
-        for i in 0..<2 {
-            let bytes = state.maxFrames * MemoryLayout<Float32>.size
-            abl[i] = AudioBuffer(mNumberChannels: 1, mDataByteSize: UInt32(bytes),
-                                 mData: malloc(bytes))
+        let status = AudioDeviceCreateIOProcIDWithBlock(&pid, agg, nil, block)
+        guard status == noErr, let pid else { return false }
+        procID = pid
+        guard AudioDeviceStart(agg, pid) == noErr else {
+            AudioDeviceDestroyIOProcID(agg, pid)
+            procID = nil
+            return false
         }
-        state.inputABL = abl
-
-        var callback = AURenderCallbackStruct(
-            inputProc: spatialRender,
-            inputProcRefCon: Unmanaged.passUnretained(state).toOpaque())
-        guard AudioUnitSetProperty(unit, kAudioUnitProperty_SetRenderCallback,
-                                   kAudioUnitScope_Input, 0, &callback,
-                                   UInt32(MemoryLayout<AURenderCallbackStruct>.size)) == noErr else { return false }
-
-        state.unit = unit
-        guard AudioUnitInitialize(unit) == noErr else { return false }
-        guard AudioOutputUnitStart(unit) == noErr else { return false }
         return true
+    }
+
+    private func ownProcessObject() -> AudioObjectID {
+        var pid = pid_t(ProcessInfo.processInfo.processIdentifier)
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyTranslatePIDToProcessObject,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var obj = AudioObjectID(0)
+        var size = UInt32(MemoryLayout<AudioObjectID>.size)
+        withUnsafeMutablePointer(to: &pid) { p in
+            _ = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                           UInt32(MemoryLayout<pid_t>.size), p, &size, &obj)
+        }
+        return obj
     }
 
     private func outputChannels(_ id: AudioDeviceID) -> Int {
@@ -471,12 +416,5 @@ final class SpatialEngine: ObservableObject {
         var v = id
         AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil,
                                    UInt32(MemoryLayout<AudioDeviceID>.size), &v)
-    }
-
-    private func restorePreviousOutput() {
-        defer { UserDefaults.standard.removeObject(forKey: Self.prevOutputKey) }
-        guard let prevUID = UserDefaults.standard.string(forKey: Self.prevOutputKey),
-              let id = deviceID(uidContains: prevUID) else { return }
-        setSystemDefaultOutput(id)
     }
 }

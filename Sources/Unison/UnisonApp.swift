@@ -126,8 +126,9 @@ struct UnisonApp: App {
                     _ = engine.start(positions: cfg.spatialPositions,
                                      excluded: cfg.spatialExcluded)
                 }
-            } else if cfg.spatialEnabled, engine.blackHoleInstalled {
-                // Driver just finished installing: start without a click.
+            } else if cfg.spatialEnabled, !engine.captureDenied {
+                // A start that failed on a transient device state gets
+                // another chance when devices change.
                 _ = engine.start(positions: cfg.spatialPositions,
                                  excluded: cfg.spatialExcluded)
             }

@@ -3,7 +3,8 @@ import PackageDescription
 
 let package = Package(
     name: "Unison",
-    platforms: [.macOS(.v14)],
+    // 14.4: Core Audio process taps with the unified TCC category.
+    platforms: [.macOS("14.4")],
     targets: [
         .target(name: "CIOAVService", path: "Sources/CIOAVService"),
         .executableTarget(
