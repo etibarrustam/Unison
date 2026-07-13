@@ -4,6 +4,7 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     @ObservedObject var state: AppState
     var spatial: SpatialEngine? = nil
+    @StateObject private var installer = DriverInstaller()
 
     var body: some View {
         HStack(alignment: .top, spacing: 20) {
@@ -142,16 +143,24 @@ struct SettingsView: View {
                     }
                 }
             } else if !spatial.blackHoleInstalled {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Full spatial mode needs the free BlackHole audio driver. Install it, then toggle again:")
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Spatial mode needs a small free audio driver (BlackHole). One click, one password, done.")
                         .font(.caption).foregroundStyle(.secondary)
-                    Text("brew install blackhole-2ch")
-                        .font(.caption.monospaced())
-                        .textSelection(.enabled)
-                    Button("Try again") {
-                        _ = spatial.start(positions: settings.spatialPositions)
-                        state.applyAll()
-                    }.font(.caption)
+                    switch installer.phase {
+                    case .idle:
+                        Button("Install Audio Driver") { installer.install() }
+                    case .downloading:
+                        HStack(spacing: 6) {
+                            ProgressView().controlSize(.small)
+                            Text("Downloading...").font(.caption).foregroundStyle(.secondary)
+                        }
+                    case .launched:
+                        Text("Finish the installer window, then spatial mode starts by itself.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message).font(.caption).foregroundStyle(.red)
+                        Button("Install Audio Driver") { installer.install() }
+                    }
                 }
             }
         }

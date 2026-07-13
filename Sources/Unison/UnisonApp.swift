@@ -117,8 +117,12 @@ struct UnisonApp: App {
         startKeyboard(s, cfg)
         watcher.onChange = { [weak s, weak engine, weak cfg] in
             s?.refreshDevices()
-            // Rebuild the aggregate when devices come and go.
-            if let engine, engine.isRunning, let cfg {
+            guard let engine, let cfg else { return }
+            if engine.isRunning {
+                // Rebuild the aggregate when devices come and go.
+                _ = engine.start(positions: cfg.spatialPositions)
+            } else if cfg.spatialEnabled, engine.blackHoleInstalled {
+                // Driver just finished installing: start without a click.
                 _ = engine.start(positions: cfg.spatialPositions)
             }
         }
