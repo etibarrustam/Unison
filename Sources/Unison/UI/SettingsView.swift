@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var settings: Settings
     @ObservedObject var state: AppState
+    var spatial: SpatialEngine? = nil
 
     var body: some View {
         HStack(alignment: .top, spacing: 20) {
@@ -52,15 +53,22 @@ struct SettingsView: View {
                         ForEach(state.speakers) { s in
                             deviceRow(id: s.id, name: s.name,
                                       scale: volumeScaleBinding(s.id))
-                            if settings.spatialEnabled && s.pannable {
+                            if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
                                 positionRow(s.id)
                             }
                         }
                         HStack {
                             Toggle("Stereo positions", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Place each speaker where it physically sits, from full left to full right. A speaker on the left plays mostly left-channel sound, so stereo and 8D audio image correctly across all devices. Works anywhere on the axis, including devices behind you placed rear-left or rear-right. Monitors receive a balance command; if a monitor ignores it, set balance once in its own menu.")
+                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Uses the BlackHole audio driver; without it, a simpler per-device balance is used where hardware allows.")
                         }
-                        .onChange(of: settings.spatialEnabled) { _, _ in state.applyAll() }
+                        .onChange(of: settings.spatialEnabled) { _, on in
+                            if on { _ = spatial?.start(positions: settings.spatialPositions) }
+                            else { spatial?.stop() }
+                            state.applyAll()
+                        }
+                        if settings.spatialEnabled {
+                            spatialSection
+                        }
                     }.padding(6)
                 } label: {
                     HStack {
@@ -106,6 +114,46 @@ struct SettingsView: View {
             content
             InfoButton(text: info)
             Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var spatialSection: some View {
+        if let spatial {
+            if spatial.isRunning {
+                Divider()
+                ForEach(spatial.availableSpeakers()) { sp in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(sp.name).font(.caption)
+                        HStack(spacing: 8) {
+                            Text("L").font(.caption).foregroundStyle(.secondary)
+                            Slider(value: Binding(
+                                get: { settings.spatialPositions[sp.id] ?? 0.5 },
+                                set: {
+                                    settings.spatialPositions[sp.id] = $0
+                                    spatial.updatePositions(settings.spatialPositions)
+                                }
+                            ), in: 0...1)
+                            Text("R").font(.caption).foregroundStyle(.secondary)
+                            Text(panLabel(settings.spatialPositions[sp.id] ?? 0.5))
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                                .frame(width: 64, alignment: .trailing)
+                        }
+                    }
+                }
+            } else if !spatial.blackHoleInstalled {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Full spatial mode needs the free BlackHole audio driver. Install it, then toggle again:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("brew install blackhole-2ch")
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                    Button("Try again") {
+                        _ = spatial.start(positions: settings.spatialPositions)
+                        state.applyAll()
+                    }.font(.caption)
+                }
+            }
         }
     }
 

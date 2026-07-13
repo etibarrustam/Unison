@@ -57,6 +57,16 @@ final class Settings: ObservableObject {
         }
     }
 
+    // Per-speaker-channel positions for the spatial engine, keyed by
+    // SpatialSpeaker.id, 0 left...1 right.
+    var spatialPositions: [String: Double] {
+        willSet { if newValue != spatialPositions { objectWillChange.send() } }
+        didSet {
+            guard spatialPositions != oldValue else { return }
+            UserDefaults.standard.set(spatialPositions, forKey: "unison.spatialPositions")
+        }
+    }
+
     // Stereo positions, 0 left...1 right, 0.5 center.
     var speakerPans: [String: Double] {
         willSet { if newValue != speakerPans { objectWillChange.send() } }
@@ -69,6 +79,7 @@ final class Settings: ObservableObject {
     func pan(_ id: String) -> Double { speakerPans[id] ?? 0.5 }
 
     init() {
+        spatialPositions = UserDefaults.standard.dictionary(forKey: "unison.spatialPositions") as? [String: Double] ?? [:]
         speakerPans = UserDefaults.standard.dictionary(forKey: "unison.speakerPans") as? [String: Double] ?? [:]
         menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled

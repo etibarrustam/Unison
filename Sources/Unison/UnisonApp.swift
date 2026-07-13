@@ -6,6 +6,7 @@ import SwiftUI
 final class ReopenHandler: NSObject, NSApplicationDelegate {
     @MainActor static weak var settings: Settings?
     @MainActor static weak var state: AppState?
+    @MainActor static weak var spatial: SpatialEngine?
     private static let reopenNote = Notification.Name("com.unison.app.reopen")
     private var recoveryWindow: NSWindow?
 
@@ -51,6 +52,7 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         NSLog("Unison: applicationShouldTerminate called")
+        MainActor.assumeIsolated { Self.spatial?.stop() }
         return .terminateNow
     }
 
@@ -68,7 +70,7 @@ final class ReopenHandler: NSObject, NSApplicationDelegate {
         guard let settings, let state else { return }
         let w = sharedRecoveryWindow ?? {
             let w = NSWindow(contentViewController:
-                NSHostingController(rootView: SettingsView(settings: settings, state: state)))
+                NSHostingController(rootView: SettingsView(settings: settings, state: state, spatial: spatial)))
             w.title = "Unison Settings"
             w.isReleasedWhenClosed = false
             sharedRecoveryWindow = w
@@ -87,6 +89,7 @@ struct UnisonApp: App {
     @StateObject private var settings: Settings
     private let keyboard = KeyboardTap()
     private let watcher = DeviceWatcher()
+    private let spatial = SpatialEngine()
 
     init() {
         let built = DeviceDiscovery.buildInitialState()
@@ -101,14 +104,29 @@ struct UnisonApp: App {
         s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
-        s.spatialEnabled = { [weak cfg] in cfg?.spatialEnabled ?? false }
+        // Device-level pan is the fallback when the engine is not running.
+        let engine = spatial
+        s.spatialEnabled = { [weak cfg, weak engine] in
+            (cfg?.spatialEnabled ?? false) && !(engine?.isRunning ?? false)
+        }
         s.speakerPan = { [weak cfg] id in cfg?.pan(id) ?? 0.5 }
+        ReopenHandler.spatial = spatial
         // Apply only after the scale and enable closures are wired, so the
         // launch write already respects per-device caps.
         s.applyAll()
         startKeyboard(s, cfg)
-        watcher.onChange = { [weak s] in s?.refreshDevices() }
+        watcher.onChange = { [weak s, weak engine, weak cfg] in
+            s?.refreshDevices()
+            // Rebuild the aggregate when devices come and go.
+            if let engine, engine.isRunning, let cfg {
+                _ = engine.start(positions: cfg.spatialPositions)
+            }
+        }
         watcher.start()
+        spatial.restoreIfStranded()
+        if cfg.spatialEnabled {
+            _ = spatial.start(positions: cfg.spatialPositions)
+        }
     }
 
     private func startKeyboard(_ state: AppState, _ settings: Settings) {
@@ -166,7 +184,7 @@ struct UnisonApp: App {
         .menuBarExtraStyle(.window)
 
         SwiftUI.Settings {
-            SettingsView(settings: settings, state: state)
+            SettingsView(settings: settings, state: state, spatial: spatial)
         }
 
         Window("Unison Help", id: "help") {
