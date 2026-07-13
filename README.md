@@ -36,16 +36,10 @@ Install with Homebrew:
 
 ```
 brew install etibarrustam/tap/unison
-```
-
-Then copy the app to your Applications folder and open it:
-
-```
-cp -R "$(brew --prefix)/opt/unison/Unison.app" /Applications/
 open /Applications/Unison.app
 ```
 
-Grant the two permissions macOS asks for, described below, and you are done. The full name `etibarrustam/tap/unison` matters, because plain `unison` is a different tool in Homebrew.
+The install puts Unison.app into your Applications folder by itself. Grant the two permissions macOS asks for, described below, and you are done. The full name `etibarrustam/tap/unison` matters, because plain `unison` is a different tool in Homebrew.
 
 The app builds on your machine during the install, which takes under a minute and is what lets it run without Apple notarization.
 
