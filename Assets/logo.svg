@@ -1,17 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#7C5CFF"/>
-      <stop offset="1" stop-color="#4527C9"/>
-    </linearGradient>
-  </defs>
-  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
-  <g fill="none" stroke="#FFFFFF" stroke-width="54" stroke-linecap="round">
-    <path d="M 379.1 421.9 A 110 110 0 0 0 379.1 602.1"/>
-    <path d="M 333.0 356.4 A 190 190 0 0 0 333.0 667.6"/>
-    <path d="M 644.9 421.9 A 110 110 0 0 1 644.9 602.1"/>
-    <path d="M 691.0 356.4 A 190 190 0 0 1 691.0 667.6"/>
-  </g>
-  <circle cx="442" cy="512" r="42" fill="#FFFFFF"/>
-  <circle cx="582" cy="512" r="42" fill="#FFFFFF"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024"><defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#7C5CFF"/><stop offset="1" stop-color="#4527C9"/></linearGradient></defs><rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+<path d="M 338 352 L 338 546 A 174 174 0 0 0 686 546 L 686 352" fill="none" stroke="#FFFFFF" stroke-width="76" stroke-linecap="round" stroke-linejoin="round"/>
+<circle cx="338" cy="342" r="70" fill="#FFFFFF"/>
+<circle cx="686" cy="342" r="70" fill="#FFFFFF"/>
 </svg>
