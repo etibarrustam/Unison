@@ -2,9 +2,12 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# CONFIG=release for optimized installs (Homebrew uses this).
+# CONFIG=release for optimized installs. SWIFT_FLAGS carries extra
+# build flags; Homebrew passes --disable-sandbox because its own build
+# sandbox forbids the nested one SwiftPM creates.
 CONFIG="${CONFIG:-debug}"
-swift build -c "$CONFIG"
+SWIFT_FLAGS="${SWIFT_FLAGS:-}"
+swift build -c "$CONFIG" $SWIFT_FLAGS
 BIN=".build/$CONFIG/Unison"
 
 APP="build/Unison.app"
