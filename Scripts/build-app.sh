@@ -2,8 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c debug
-BIN=".build/debug/Unison"
+# CONFIG=release for optimized installs (Homebrew uses this).
+CONFIG="${CONFIG:-debug}"
+swift build -c "$CONFIG"
+BIN=".build/$CONFIG/Unison"
 
 APP="build/Unison.app"
 rm -rf "$APP"

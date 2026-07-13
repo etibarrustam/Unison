@@ -30,11 +30,24 @@ Displays mirrors the speaker settings for brightness: a tick per display and a m
 
 ## Installation
 
-1. Clone this repository.
-2. Run `./Scripts/run.sh`. It builds the app into `build/Unison.app` and opens it.
-3. Grant the two permissions macOS asks for, described below.
+Install with Homebrew:
 
-That is the whole installation. Unison keeps everything in this folder plus one standard preferences file that macOS manages.
+```
+brew install etibarrustam/tap/unison
+```
+
+Then copy the app to your Applications folder and open it:
+
+```
+cp -R "$(brew --prefix)/opt/unison/Unison.app" /Applications/
+open /Applications/Unison.app
+```
+
+Grant the two permissions macOS asks for, described below, and you are done. The full name `etibarrustam/tap/unison` matters, because plain `unison` is a different tool in Homebrew.
+
+The app builds on your machine during the install, which takes under a minute and is what lets it run without Apple notarization.
+
+To install from source instead, clone this repository and run `./Scripts/run.sh`. It builds the app into `build/Unison.app` and opens it.
 
 ## Permissions
 
