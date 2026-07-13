@@ -188,9 +188,10 @@ struct UnisonApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("Unison", systemImage: "slider.horizontal.3",
-                     isInserted: $settings.menuIconVisible) {
+        MenuBarExtra(isInserted: $settings.menuIconVisible) {
             PopoverView(state: state, settings: settings)
+        } label: {
+            Image(nsImage: MenuBarIcon.image)
         }
         .menuBarExtraStyle(.window)
 
