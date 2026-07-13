@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct SettingsView: View {
     @ObservedObject var settings: Settings
@@ -132,6 +133,16 @@ struct SettingsView: View {
                     if !settings.spatialExcluded.contains(dev.uid) {
                         ForEach(spatial.availableSpeakers().filter { $0.deviceUID == dev.uid }) { sp in
                             spatialSliderRow(sp, spatial: spatial)
+                        }
+                    }
+                }
+            } else if spatial.blackHoleInstalled && !spatial.micAuthorized {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("macOS files reading the system audio stream under the microphone permission. Allow it for Unison; your microphone itself is never recorded.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Open Microphone Privacy Settings") {
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+                            NSWorkspace.shared.open(url)
                         }
                     }
                 }

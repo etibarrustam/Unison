@@ -1,6 +1,7 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
+import AVFoundation
 import os
 
 // Shared with the realtime render callback. Only this box is touched from
@@ -10,6 +11,12 @@ final class SpatialRenderState: @unchecked Sendable {
     var inputABL: UnsafeMutableAudioBufferListPointer?
     var maxFrames: Int = 4096
     var totalOutputChannels: Int = 0
+    // Diagnostics, written by the render thread and read by the debug
+    // timer; tearing is acceptable there.
+    var cbCount: Int = 0
+    var inStatus: OSStatus = noErr
+    var inPeak: Float = 0
+    var outPeak: Float = 0
     private var lock = os_unfair_lock()
     // Dense per-output-channel gains; channels without a speaker stay 0.
     private var gainL = [Float](repeating: 0, count: 64)
@@ -51,6 +58,8 @@ private func spatialRender(_ refCon: UnsafeMutableRawPointer,
         inputABL[i].mDataByteSize = UInt32(state.maxFrames * MemoryLayout<Float32>.size)
     }
     let status = AudioUnitRender(unit, ioActionFlags, inTimeStamp, 1, inNumberFrames, inputABL.unsafeMutablePointer)
+    state.cbCount += 1
+    state.inStatus = status
     let out = UnsafeMutableAudioBufferListPointer(ioData)
     guard status == noErr, inputABL.count >= 2,
           let inL = inputABL[0].mData?.assumingMemoryBound(to: Float32.self),
@@ -62,6 +71,9 @@ private func spatialRender(_ refCon: UnsafeMutableRawPointer,
     }
 
     let n = Int(inNumberFrames)
+    for f in 0..<n {
+        state.inPeak = max(state.inPeak, max(abs(inL[f]), abs(inR[f])))
+    }
     for ch in 0..<out.count {
         guard let d = out[ch].mData?.assumingMemoryBound(to: Float32.self) else { continue }
         let (gl, gr) = state.gains(ch)
@@ -71,6 +83,7 @@ private func spatialRender(_ refCon: UnsafeMutableRawPointer,
         }
         for f in 0..<n {
             d[f] = gl * inL[f] + gr * inR[f]
+            state.outPeak = max(state.outPeak, abs(d[f]))
         }
     }
     return noErr
@@ -95,8 +108,15 @@ final class SpatialEngine: ObservableObject {
     private var channelCounts: [String: Int] = [:]
     private var excluded: Set<String> = []
     private var pinBlock: AudioObjectPropertyListenerBlock?
+    private var debugTimer: Timer?
 
     var blackHoleInstalled: Bool { deviceID(uidContains: "BlackHole") != nil }
+
+    // macOS files reading the loopback stream under the microphone
+    // permission; without it CoreAudio delivers silence, not an error.
+    var micAuthorized: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
+    }
 
     // Every real output device, including excluded ones, so the settings
     // UI can offer re-inclusion.
@@ -124,6 +144,22 @@ final class SpatialEngine: ObservableObject {
     }
 
     func start(positions: [String: Double], excluded: Set<String>) -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            break
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                guard granted else { return }
+                Task { @MainActor [weak self] in
+                    guard let self, !self.isRunning else { return }
+                    _ = self.start(positions: positions, excluded: excluded)
+                }
+            }
+            return false
+        default:
+            NSLog("Unison: microphone permission denied, engine cannot read the loopback")
+            return false
+        }
         let wasRunning = isRunning
         teardown()
         isRunning = false
@@ -186,8 +222,30 @@ final class SpatialEngine: ObservableObject {
         setSystemDefaultOutput(aggID)
         isRunning = true
         pinDefaultOutput()
+        startDebugDump()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
         return true
+    }
+
+    // Hidden diagnostics: defaults write com.unison.app unison.spatialDebug
+    // -bool true, then read /tmp/unison-spatial.log.
+    private func startDebugDump() {
+        guard UserDefaults.standard.bool(forKey: "unison.spatialDebug") else { return }
+        let s = state
+        let order = deviceOrder
+        debugTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
+            let line = "\(Date()) cb=\(s.cbCount) inStatus=\(s.inStatus) inPeak=\(s.inPeak) outPeak=\(s.outPeak) outCh=\(s.totalOutputChannels) order=\(order)\n"
+            s.inPeak = 0
+            s.outPeak = 0
+            if let data = line.data(using: .utf8),
+               let fh = FileHandle(forWritingAtPath: "/tmp/unison-spatial.log") {
+                fh.seekToEndOfFile()
+                fh.write(data)
+                fh.closeFile()
+            } else {
+                try? line.write(toFile: "/tmp/unison-spatial.log", atomically: true, encoding: .utf8)
+            }
+        }
     }
 
     func stop() {
@@ -228,6 +286,8 @@ final class SpatialEngine: ObservableObject {
         mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
 
     private func teardown() {
+        debugTimer?.invalidate()
+        debugTimer = nil
         unpinDefaultOutput()
         if let unit = state.unit {
             AudioOutputUnitStop(unit)

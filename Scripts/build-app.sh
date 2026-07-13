@@ -22,6 +22,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSMicrophoneUsageDescription</key><string>Unison reads the system audio loopback stream to position sound across your speakers. Nothing from your microphone is recorded.</string>
 </dict>
 </plist>
 PLIST

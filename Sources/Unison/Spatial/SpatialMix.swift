@@ -30,7 +30,11 @@ enum SpatialMix {
                   let count = channelCounts[s.deviceUID],
                   s.channel >= 1, s.channel <= count else { continue }
             let g = LevelMath.channelGains(volume: 1, pan: s.position)
-            result[base + s.channel - 1] = (g.left, g.right)
+            // Both sides land in one physical channel, so the correlated
+            // sum must stay at unity or loud content clips.
+            let sum = g.left + g.right
+            let scale = sum > 1 ? 1 / sum : 1
+            result[base + s.channel - 1] = (g.left * scale, g.right * scale)
         }
         return result
     }
