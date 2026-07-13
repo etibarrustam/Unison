@@ -119,17 +119,24 @@ struct UnisonApp: App {
             s?.refreshDevices()
             guard let engine, let cfg else { return }
             if engine.isRunning {
-                // Rebuild the aggregate when devices come and go.
-                _ = engine.start(positions: cfg.spatialPositions)
+                // Rebuild only when a device really came or went; creating
+                // our own aggregate fires this notification too, and an
+                // unconditional restart loops forever.
+                if engine.realDevicesChanged() {
+                    _ = engine.start(positions: cfg.spatialPositions,
+                                     excluded: cfg.spatialExcluded)
+                }
             } else if cfg.spatialEnabled, engine.blackHoleInstalled {
                 // Driver just finished installing: start without a click.
-                _ = engine.start(positions: cfg.spatialPositions)
+                _ = engine.start(positions: cfg.spatialPositions,
+                                 excluded: cfg.spatialExcluded)
             }
         }
         watcher.start()
         spatial.restoreIfStranded()
         if cfg.spatialEnabled {
-            _ = spatial.start(positions: cfg.spatialPositions)
+            _ = spatial.start(positions: cfg.spatialPositions,
+                              excluded: cfg.spatialExcluded)
         }
     }
 

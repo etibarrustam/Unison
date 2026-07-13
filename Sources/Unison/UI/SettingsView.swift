@@ -60,11 +60,15 @@ struct SettingsView: View {
                         }
                         HStack {
                             Toggle("Stereo positions", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Uses the BlackHole audio driver; without it, a simpler per-device balance is used where hardware allows.")
+                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. While on, the system output is a combined device named Unison Spatial; pick the devices it plays through right here, no Audio MIDI Setup needed. Uses the BlackHole audio driver; without it, a simpler per-device balance is used where hardware allows.")
                         }
                         .onChange(of: settings.spatialEnabled) { _, on in
-                            if on { _ = spatial?.start(positions: settings.spatialPositions) }
-                            else { spatial?.stop() }
+                            if on {
+                                _ = spatial?.start(positions: settings.spatialPositions,
+                                                   excluded: settings.spatialExcluded)
+                            } else {
+                                spatial?.stop()
+                            }
                             state.applyAll()
                         }
                         if settings.spatialEnabled {
@@ -123,22 +127,11 @@ struct SettingsView: View {
         if let spatial {
             if spatial.isRunning {
                 Divider()
-                ForEach(spatial.availableSpeakers()) { sp in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(sp.name).font(.caption)
-                        HStack(spacing: 8) {
-                            Text("L").font(.caption).foregroundStyle(.secondary)
-                            Slider(value: Binding(
-                                get: { settings.spatialPositions[sp.id] ?? 0.5 },
-                                set: {
-                                    settings.spatialPositions[sp.id] = $0
-                                    spatial.updatePositions(settings.spatialPositions)
-                                }
-                            ), in: 0...1)
-                            Text("R").font(.caption).foregroundStyle(.secondary)
-                            Text(panLabel(settings.spatialPositions[sp.id] ?? 0.5))
-                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                                .frame(width: 64, alignment: .trailing)
+                ForEach(spatial.outputDeviceList()) { dev in
+                    Toggle(dev.name, isOn: spatialIncludedBinding(dev.uid))
+                    if !settings.spatialExcluded.contains(dev.uid) {
+                        ForEach(spatial.availableSpeakers().filter { $0.deviceUID == dev.uid }) { sp in
+                            spatialSliderRow(sp, spatial: spatial)
                         }
                     }
                 }
@@ -164,6 +157,37 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private func spatialSliderRow(_ sp: SpatialSpeaker, spatial: SpatialEngine) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(sp.name).font(.caption)
+            HStack(spacing: 8) {
+                Text("L").font(.caption).foregroundStyle(.secondary)
+                Slider(value: Binding(
+                    get: { settings.spatialPositions[sp.id] ?? 0.5 },
+                    set: {
+                        settings.spatialPositions[sp.id] = $0
+                        spatial.updatePositions(settings.spatialPositions)
+                    }
+                ), in: 0...1)
+                Text("R").font(.caption).foregroundStyle(.secondary)
+                Text(panLabel(settings.spatialPositions[sp.id] ?? 0.5))
+                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    .frame(width: 64, alignment: .trailing)
+            }
+        }
+        .padding(.leading, 20)
+    }
+
+    private func spatialIncludedBinding(_ uid: String) -> Binding<Bool> {
+        Binding(get: { !settings.spatialExcluded.contains(uid) },
+                set: { on in
+                    if on { settings.spatialExcluded.remove(uid) }
+                    else { settings.spatialExcluded.insert(uid) }
+                    _ = spatial?.start(positions: settings.spatialPositions,
+                                       excluded: settings.spatialExcluded)
+                })
     }
 
     private func positionRow(_ id: String) -> some View {

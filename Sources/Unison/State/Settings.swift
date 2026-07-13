@@ -67,6 +67,16 @@ final class Settings: ObservableObject {
         }
     }
 
+    // Output devices excluded from the spatial aggregate, by CoreAudio
+    // device UID. Everything is included by default.
+    var spatialExcluded: Set<String> {
+        willSet { if newValue != spatialExcluded { objectWillChange.send() } }
+        didSet {
+            guard spatialExcluded != oldValue else { return }
+            UserDefaults.standard.set(Array(spatialExcluded), forKey: "unison.spatialExcluded")
+        }
+    }
+
     // Stereo positions, 0 left...1 right, 0.5 center.
     var speakerPans: [String: Double] {
         willSet { if newValue != speakerPans { objectWillChange.send() } }
@@ -80,6 +90,7 @@ final class Settings: ObservableObject {
 
     init() {
         spatialPositions = UserDefaults.standard.dictionary(forKey: "unison.spatialPositions") as? [String: Double] ?? [:]
+        spatialExcluded = Set(UserDefaults.standard.stringArray(forKey: "unison.spatialExcluded") ?? [])
         speakerPans = UserDefaults.standard.dictionary(forKey: "unison.speakerPans") as? [String: Double] ?? [:]
         menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true
         launchAtLogin = SMAppService.mainApp.status == .enabled

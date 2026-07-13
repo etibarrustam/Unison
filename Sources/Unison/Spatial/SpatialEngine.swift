@@ -76,6 +76,13 @@ private func spatialRender(_ refCon: UnsafeMutableRawPointer,
     return noErr
 }
 
+// One entry per physical output device, for the membership toggles.
+struct SpatialOutputDevice: Identifiable {
+    let uid: String
+    let name: String
+    var id: String { uid }
+}
+
 @MainActor
 final class SpatialEngine: ObservableObject {
     static let aggregateUID = "com.unison.spatial.aggregate"
@@ -86,12 +93,20 @@ final class SpatialEngine: ObservableObject {
     @Published private(set) var isRunning = false
     private var deviceOrder: [String] = []
     private var channelCounts: [String: Int] = [:]
+    private var excluded: Set<String> = []
+    private var pinBlock: AudioObjectPropertyListenerBlock?
 
     var blackHoleInstalled: Bool { deviceID(uidContains: "BlackHole") != nil }
 
-    // Every channel of every real output device except the loopback.
+    // Every real output device, including excluded ones, so the settings
+    // UI can offer re-inclusion.
+    func outputDeviceList() -> [SpatialOutputDevice] {
+        realOutputDevices().map { SpatialOutputDevice(uid: $0.uid, name: $0.name) }
+    }
+
+    // Every channel of every included output device except the loopback.
     func availableSpeakers() -> [SpatialSpeaker] {
-        realOutputDevices().flatMap { dev in
+        includedOutputDevices().flatMap { dev in
             (1...dev.channels).map { ch in
                 let side = dev.channels == 2 ? (ch == 1 ? "Left" : "Right") : "Ch \(ch)"
                 return SpatialSpeaker(deviceUID: dev.uid, channel: ch,
@@ -100,17 +115,40 @@ final class SpatialEngine: ObservableObject {
         }
     }
 
-    func start(positions: [String: Double]) -> Bool {
-        stop()
-        guard let bhID = deviceID(uidContains: "BlackHole"), let bhUID = uid(bhID) else { return false }
-        let devices = realOutputDevices()
-        guard !devices.isEmpty else { return false }
+    // True when a device joined or left since the last start. The watcher
+    // uses this so our own aggregate churn never triggers a rebuild loop.
+    func realDevicesChanged() -> Bool {
+        let current = includedOutputDevices()
+        return current.map(\.uid) != deviceOrder
+            || Dictionary(uniqueKeysWithValues: current.map { ($0.uid, $0.channels) }) != channelCounts
+    }
+
+    func start(positions: [String: Double], excluded: Set<String>) -> Bool {
+        let wasRunning = isRunning
+        teardown()
+        isRunning = false
+        self.excluded = excluded
+
+        func fail() -> Bool {
+            if wasRunning { restorePreviousOutput() }
+            return false
+        }
+        guard let bhUID = deviceID(uidContains: "BlackHole").flatMap({ uid($0) }) else { return fail() }
+        let devices = includedOutputDevices()
+        guard !devices.isEmpty else { return fail() }
 
         deviceOrder = devices.map(\.uid)
         channelCounts = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0.channels) })
 
+        // A public aggregate survives a crashed owner; a leftover with our
+        // UID must go before a new one can take its place.
+        if let stale = deviceID(uidContains: Self.aggregateUID) {
+            AudioHardwareDestroyAggregateDevice(stale)
+        }
+
         // Aggregate: BlackHole first (clock master, loopback input), then
-        // all real outputs with drift compensation.
+        // all included outputs with drift compensation. Public, so it shows
+        // up in the sound settings and Audio MIDI Setup under our name.
         var subs: [[String: Any]] = [[kAudioSubDeviceUIDKey as String: bhUID]]
         for d in devices {
             subs.append([kAudioSubDeviceUIDKey as String: d.uid,
@@ -121,33 +159,76 @@ final class SpatialEngine: ObservableObject {
             kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
             kAudioAggregateDeviceSubDeviceListKey as String: subs,
             kAudioAggregateDeviceMainSubDeviceKey as String: bhUID,
-            kAudioAggregateDeviceIsPrivateKey as String: 1,
+            kAudioAggregateDeviceIsPrivateKey as String: 0,
             kAudioAggregateDeviceIsStackedKey as String: 0
         ]
         var aggID = AudioDeviceID(0)
-        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else { return false }
+        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else { return fail() }
         aggregateID = aggID
         usleep(150_000)  // aggregate needs a moment to publish streams
 
         guard setupUnit(aggregate: aggID) else {
             AudioHardwareDestroyAggregateDevice(aggID)
             aggregateID = 0
-            return false
+            return fail()
         }
 
         updatePositions(positions)
 
-        // Route the system to the loopback and remember the way back.
-        if let currentUID = uid(systemDefaultOutput()) {
+        // Route the system to our aggregate. System stereo lands on its
+        // first two channels, which are the loopback. Remember the way
+        // back only when leaving a real device, so restarts cannot save
+        // the loopback as the place to return to.
+        if let currentUID = uid(systemDefaultOutput()),
+           !currentUID.contains("BlackHole"), currentUID != Self.aggregateUID {
             UserDefaults.standard.set(currentUID, forKey: Self.prevOutputKey)
         }
-        setSystemDefaultOutput(bhID)
+        setSystemDefaultOutput(aggID)
         isRunning = true
+        pinDefaultOutput()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
         return true
     }
 
     func stop() {
+        teardown()
+        if isRunning {
+            restorePreviousOutput()
+            isRunning = false
+            NSLog("Unison: spatial engine stopped")
+        }
+    }
+
+    // The OS restores the last user-chosen output a few seconds after a
+    // new device appears; while spatial runs the aggregate must stay the
+    // default or audio silently bypasses the engine.
+    private func pinDefaultOutput() {
+        var addr = Self.defaultOutputAddress
+        let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            MainActor.assumeIsolated {
+                guard let self, self.isRunning,
+                      self.systemDefaultOutput() != self.aggregateID else { return }
+                NSLog("Unison: default output moved away, re-pinning aggregate")
+                self.setSystemDefaultOutput(self.aggregateID)
+            }
+        }
+        AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main, block)
+        pinBlock = block
+    }
+
+    private func unpinDefaultOutput() {
+        guard let block = pinBlock else { return }
+        var addr = Self.defaultOutputAddress
+        AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main, block)
+        pinBlock = nil
+    }
+
+    private static let defaultOutputAddress = AudioObjectPropertyAddress(
+        mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+        mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+
+    private func teardown() {
+        unpinDefaultOutput()
         if let unit = state.unit {
             AudioOutputUnitStop(unit)
             AudioUnitUninitialize(unit)
@@ -158,19 +239,18 @@ final class SpatialEngine: ObservableObject {
             AudioHardwareDestroyAggregateDevice(aggregateID)
             aggregateID = 0
         }
-        if isRunning {
-            restorePreviousOutput()
-            isRunning = false
-            NSLog("Unison: spatial engine stopped")
-        }
     }
 
-    // Crash safety: if a previous run left the system on the loopback,
-    // put it back even though no engine is running.
+    // Crash safety: if a previous run left the system on the loopback or
+    // on our aggregate, put it back even though no engine is running.
     func restoreIfStranded() {
-        guard !isRunning,
-              UserDefaults.standard.string(forKey: Self.prevOutputKey) != nil else { return }
-        if let currentUID = uid(systemDefaultOutput()), currentUID.contains("BlackHole") {
+        guard !isRunning else { return }
+        let currentUID = uid(systemDefaultOutput())
+        if let stale = deviceID(uidContains: Self.aggregateUID) {
+            AudioHardwareDestroyAggregateDevice(stale)
+        }
+        guard UserDefaults.standard.string(forKey: Self.prevOutputKey) != nil else { return }
+        if let currentUID, currentUID.contains("BlackHole") || currentUID == Self.aggregateUID {
             restorePreviousOutput()
             NSLog("Unison: restored output stranded on loopback")
         } else {
@@ -208,6 +288,13 @@ final class SpatialEngine: ObservableObject {
                 guard ch > 0 else { return nil }
                 return OutputDevice(id: out.id, uid: out.uid, name: out.name, channels: ch)
             }
+    }
+
+    // Sorted by UID: CoreAudio enumeration order shuffles when unrelated
+    // devices come and go, and a shuffle must not look like a hot-plug.
+    private func includedOutputDevices() -> [OutputDevice] {
+        realOutputDevices().filter { !excluded.contains($0.uid) }
+            .sorted { $0.uid < $1.uid }
     }
 
     private func setupUnit(aggregate: AudioDeviceID) -> Bool {
