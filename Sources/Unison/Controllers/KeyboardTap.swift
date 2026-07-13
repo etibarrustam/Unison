@@ -44,6 +44,26 @@ final class KeyboardTap {
         return true
     }
 
+    // Accessibility is often granted after the first launch, and creating
+    // the tap fails until then. Retry quietly so the keys start working
+    // the moment the permission arrives, with no relaunch.
+    private var retryTimer: Timer?
+
+    func startRetrying() {
+        if start() { return }
+        NSLog("Unison: event tap unavailable, waiting for the Accessibility permission")
+        retryTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                if self.start() {
+                    self.retryTimer?.invalidate()
+                    self.retryTimer = nil
+                    NSLog("Unison: event tap started after permission grant")
+                }
+            }
+        }
+    }
+
     private func reenable(after type: CGEventType) {
         guard let tap else { return }
         NSLog("Unison: event tap disabled (type \(type.rawValue)), re-enabling")

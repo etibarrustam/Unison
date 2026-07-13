@@ -184,8 +184,7 @@ struct UnisonApp: App {
                 LevelHUD.show(.brightness, value: shown, custom: settings.hudBrightness)
             }
         }
-        let started = keyboard.start()
-        NSLog("Unison: event tap started: \(started)")
+        keyboard.startRetrying()
     }
 
     var body: some Scene {
