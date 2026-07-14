@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     @ObservedObject var state: AppState
     var spatial: SpatialEngine? = nil
+    @State private var showArrange = false
 
     var body: some View {
         // Scrollable: with several devices the right column grows past any
@@ -15,6 +16,11 @@ struct SettingsView: View {
         }
         .frame(width: 680)
         .frame(minHeight: 420, idealHeight: 560, maxHeight: 720)
+        .sheet(isPresented: $showArrange) {
+            if let spatial {
+                SpeakerArrangementView(settings: settings, spatial: spatial)
+            }
+        }
         .onAppear {
             // Device ids can change (replug, id scheme); a stale keyboard
             // target would leave the picker blank and silently act as all.
@@ -66,69 +72,68 @@ struct SettingsView: View {
                         Slider(value: $settings.stepSize, in: 0.02...0.25)
                     }.padding(6)
                 }
-            }
-            .frame(width: 280)
-
-            // Right: devices with balance adjustments
-            VStack(alignment: .leading, spacing: 14) {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
-                        if let soloName {
-                            Text("Playing on \(soloName). Other devices and stereo positions resume when Unison is the selected output.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(state.speakers) { s in
-                            let inactive = soloActive && s.id != state.soloSpeakerID
-                            Group {
-                                deviceRow(id: s.id, name: s.name,
-                                          scale: volumeScaleBinding(s.id))
-                                if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
-                                    positionRow(s.id)
-                                }
-                            }
-                            .disabled(inactive)
-                            .opacity(inactive ? 0.35 : 1)
-                        }
-                        HStack {
-                            // Reads as unticked while a single device plays;
-                            // the stored preference survives and returns with
-                            // the Unison output.
-                            Toggle("Stereo positions", isOn: spatialEnabledBinding)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every position to center. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
-                            Spacer(minLength: 0)
-                            Button("Reset") { resetStereoAdjustments() }
-                                .buttonStyle(.link).font(.caption)
-                                .help("Return every speaker position to center")
-                        }
-                        .disabled(soloActive)
-                        .opacity(soloActive ? 0.35 : 1)
-                        .onChange(of: settings.spatialEnabled) { _, on in
-                            // The engine keeps playing through all devices
-                            // either way; the toggle only changes the mix.
-                            spatial?.applyMix(positions: on ? settings.spatialPositions : nil)
-                            state.applyAll()
-                        }
-                        spatialSection
-                            .disabled(soloActive)
-                            .opacity(soloActive ? 0.35 : 1)
-                    }.padding(6)
-                } label: {
-                    HStack {
-                        Text("Speakers")
-                        InfoButton(text: "Untick a device to remove it from the menu and from group control; its level stays where it was. Max output caps a device relative to the rest: zero stays zero for everyone, levels rise together, and a device at 80% always sits below the others. Use it to keep one speaker quieter or one display dimmer at any volume.")
-                    }
-                }
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
+                        Text("The slider keeps a display dimmer than the rest, at every brightness.")
+                            .font(.caption).foregroundStyle(.secondary)
                         ForEach(state.displays) { d in
-                            deviceRow(id: d.id, name: d.name,
-                                      scale: brightnessScaleBinding(d.id))
+                            balanceRow(name: d.name, isOn: enabledBinding(d.id),
+                                       scale: brightnessScaleBinding(d.id), word: "dimmer")
                         }
                     }.padding(6)
                 } label: {
                     HStack {
                         Text("Displays")
-                        InfoButton(text: "Works like the speaker settings: untick to exclude a display, and use max output to keep one display dimmer than the other at every brightness level.")
+                        InfoButton(text: "Untick a display to remove it from the menu panel and group control. The balance slider keeps one display always dimmer than the others: at 80% it sits 20% under the rest at every brightness level.")
+                    }
+                }
+            }
+            .frame(width: 280)
+
+            // Right: sound
+            VStack(alignment: .leading, spacing: 14) {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        if let soloName {
+                            Text("Playing on \(soloName). The other speakers resume when Unison is the selected output.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            // Reads as Stereo while a single device plays;
+                            // the stored preference survives and returns with
+                            // the Unison output.
+                            Picker("Sound mode", selection: soundModeBinding) {
+                                Text("Stereo").tag("stereo")
+                                Text("Mono").tag("mono")
+                                Text("Spatial").tag("spatial")
+                            }
+                            .fixedSize()
+                            InfoButton(text: "Stereo plays every ticked device with its natural left and right. Mono plays the complete mix on every speaker, best when speakers sit in different places or rooms so nobody hears only half the music. Spatial lets you drag every physical speaker to where it stands in your room, anywhere around you including behind, using Arrange Speakers; the macOS spatial mixer renders the matching part of the stereo field to each speaker, and nearer speakers are delayed a fraction so everything arrives at your seat together. Applies while Unison is the selected sound output; picking a single device plays through it alone until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            Spacer(minLength: 0)
+                            Button("Reset") { resetStereoAdjustments() }
+                                .buttonStyle(.link).font(.caption)
+                                .help("Return every speaker to its natural stereo side")
+                        }
+                        .disabled(soloActive)
+                        .opacity(soloActive ? 0.35 : 1)
+                        .onChange(of: settings.soundMode) { _, _ in
+                            // The engine keeps playing through all devices
+                            // in every mode; the picker only changes the mix.
+                            spatial?.applyMix(mode: settings.mixMode)
+                            state.applyAll()
+                        }
+                        spatialSection
+                            .disabled(soloActive)
+                            .opacity(soloActive ? 0.35 : 1)
+                        Divider()
+                        Text("A tick means the speaker plays. The slider keeps it quieter than the rest, at every volume.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        speakerRows
+                    }.padding(6)
+                } label: {
+                    HStack {
+                        Text("Sound")
+                        InfoButton(text: "Unticked speakers stay silent and leave the menu panel. The balance slider keeps a speaker permanently below the rest: at 80% it always sits 20% under the others while everything rises and falls together, and zero stays zero for everyone. Use it when one speaker is naturally louder than the rest.")
                     }
                 }
             }
@@ -143,19 +148,21 @@ struct SettingsView: View {
         return state.speakers.first { $0.id == solo }?.name
     }
 
-    // Unticked and inert while a single device is selected in the Sound
-    // list, without erasing the stored preference.
-    private var spatialEnabledBinding: Binding<Bool> {
-        Binding(get: { settings.spatialEnabled && !soloActive },
-                set: { settings.spatialEnabled = $0 })
+    // Reads as Stereo and inert while a single device is selected in the
+    // Sound list, without erasing the stored preference.
+    private var soundModeBinding: Binding<String> {
+        Binding(get: { soloActive ? "stereo" : settings.soundMode },
+                set: { settings.soundMode = $0 })
     }
 
-    // Clears both kinds of stereo adjustment: the engine's per-channel
-    // positions and the per-device pans used when the engine is off.
+    // Clears every kind of stereo adjustment: room placements, the legacy
+    // slider positions, and the per-device pans used when the engine is
+    // off. Speakers return to their natural stereo sides.
     private func resetStereoAdjustments() {
+        settings.speakerPlacements = [:]
         settings.spatialPositions = [:]
         settings.speakerPans = [:]
-        spatial?.applyMix(positions: settings.spatialEnabled ? [:] : nil)
+        spatial?.applyMix(mode: settings.mixMode)
         state.applyAll()
     }
 
@@ -167,24 +174,63 @@ struct SettingsView: View {
         }
     }
 
+    // One row per physical speaker. While the engine runs, rows come from
+    // the play-through devices merged with their volume-control twins by
+    // id or name: a monitor is one speaker to the user even though its
+    // audio device and its DDC volume control differ underneath.
+    @ViewBuilder
+    private var speakerRows: some View {
+        if let spatial, spatial.isRunning {
+            let devices = spatial.outputDeviceList()
+            ForEach(devices) { dev in
+                let match = state.speakers.first { $0.id == DeviceDiscovery.coreAudioSpeakerID(dev.uid) }
+                    ?? state.speakers.first { $0.name == dev.name }
+                let inactive = soloActive && match?.id != state.soloSpeakerID
+                balanceRow(name: dev.name,
+                           isOn: playsBinding(dev.uid, matchID: match?.id),
+                           scale: match.map { volumeScaleBinding($0.id) },
+                           word: "quieter")
+                    .disabled(inactive)
+                    .opacity(inactive ? 0.35 : 1)
+            }
+            // Volume-only speakers with no audio device of their own.
+            ForEach(unmatchedSpeakers(devices)) { s in
+                let inactive = soloActive && s.id != state.soloSpeakerID
+                balanceRow(name: s.name, isOn: enabledBinding(s.id),
+                           scale: volumeScaleBinding(s.id), word: "quieter")
+                    .disabled(inactive)
+                    .opacity(inactive ? 0.35 : 1)
+            }
+        } else {
+            ForEach(state.speakers) { s in
+                balanceRow(name: s.name, isOn: enabledBinding(s.id),
+                           scale: volumeScaleBinding(s.id), word: "quieter")
+                if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
+                    positionRow(s.id)
+                }
+            }
+        }
+    }
+
+    private func unmatchedSpeakers(_ devices: [SpatialOutputDevice]) -> [SpeakerDevice] {
+        state.speakers.filter { s in
+            !devices.contains { dev in
+                s.id == DeviceDiscovery.coreAudioSpeakerID(dev.uid) || s.name == dev.name
+            }
+        }
+    }
+
     @ViewBuilder
     private var spatialSection: some View {
         if let spatial {
             if spatial.isRunning {
-                Divider()
-                Text("Play through")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(spatial.outputDeviceList()) { dev in
-                    Toggle(dev.name, isOn: spatialIncludedBinding(dev.uid))
-                    if settings.spatialEnabled, !soloActive, !settings.spatialExcluded.contains(dev.uid) {
-                        ForEach(spatial.availableSpeakers().filter { $0.deviceUID == dev.uid }) { sp in
-                            spatialSliderRow(sp, spatial: spatial)
-                        }
-                    }
+                if settings.spatialEnabled {
+                    Button("Arrange Speakers…") { showArrange = true }
+                        .help("Drag every speaker to where it stands in your room, including behind you")
                 }
             } else if spatial.captureDenied {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("macOS blocked Unison from reading system audio. Allow Unison under System Audio Recording Only, then switch Stereo positions off and on.")
+                    Text("macOS blocked Unison from reading system audio. Allow Unison under System Audio Recording Only, then quit and reopen Unison.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Open Privacy Settings") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
@@ -196,34 +242,16 @@ struct SettingsView: View {
         }
     }
 
-    private func spatialSliderRow(_ sp: SpatialSpeaker, spatial: SpatialEngine) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(sp.name).font(.caption)
-            HStack(spacing: 8) {
-                Text("L").font(.caption).foregroundStyle(.secondary)
-                Slider(value: Binding(
-                    get: { settings.spatialPositions[sp.id] ?? 0.5 },
-                    set: {
-                        settings.spatialPositions[sp.id] = $0
-                        spatial.applyMix(positions: settings.spatialPositions)
-                    }
-                ), in: 0...1)
-                Text("R").font(.caption).foregroundStyle(.secondary)
-                Text(panLabel(settings.spatialPositions[sp.id] ?? 0.5))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .trailing)
-            }
-        }
-        .padding(.leading, 20)
-    }
-
-    private func spatialIncludedBinding(_ uid: String) -> Binding<Bool> {
+    // The one tick a speaker has: silences it in the mix and hides it
+    // from the menu panel and group control together.
+    private func playsBinding(_ uid: String, matchID: String?) -> Binding<Bool> {
         Binding(get: { !settings.spatialExcluded.contains(uid) },
                 set: { on in
                     if on { settings.spatialExcluded.remove(uid) }
                     else { settings.spatialExcluded.insert(uid) }
-                    _ = spatial?.start(positions: settings.spatialEnabled ? settings.spatialPositions : nil,
-                                       excluded: settings.spatialExcluded)
+                    if let matchID { settings.setEnabled(matchID, on) }
+                    // Mix-level change: no engine rebuild, no dropout.
+                    spatial?.setExcluded(settings.spatialExcluded, mode: settings.mixMode)
                 })
     }
 
@@ -248,21 +276,24 @@ struct SettingsView: View {
         return pct < 0 ? "\(-pct)% left" : "\(pct)% right"
     }
 
-    private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {
+    private func balanceRow(name: String, isOn: Binding<Bool>,
+                            scale: Binding<Double>?, word: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Toggle(name, isOn: enabledBinding(id))
+                Toggle(name, isOn: isOn)
                 Spacer()
-                Text(scaleLabel(scale.wrappedValue))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                if let scale {
+                    Text(scaleLabel(scale.wrappedValue, word))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
             }
-            Slider(value: scale, in: 0.1...1.0)
+            if let scale { Slider(value: scale, in: 0.1...1.0) }
         }
     }
 
-    private func scaleLabel(_ v: Double) -> String {
+    private func scaleLabel(_ v: Double, _ word: String) -> String {
         let pct = Int((v * 100).rounded())
-        return pct >= 100 ? "full output" : "max output \(pct)%"
+        return pct >= 100 ? "level with the rest" : "always \(100 - pct)% \(word)"
     }
 
     private func enabledBinding(_ id: String) -> Binding<Bool> {

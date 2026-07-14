@@ -10,7 +10,37 @@ struct SpatialSpeaker: Identifiable {
     var id: String { "\(deviceUID)#\(channel)" }
 }
 
+// How the engine mixes onto the speakers.
+enum MixMode: Equatable {
+    case stereo                       // every device keeps its natural stereo
+    case mono                         // the complete mix on every speaker
+    case spatial([String: [Double]])  // room placements drive the spatial mixer
+}
+
 enum SpatialMix {
+    // Legacy slider mapping, still used to migrate old settings: a 0...1
+    // position maps onto the front arc, -90 (full left) to +90 (right).
+    static func azimuth(fromPosition p: Double) -> Float {
+        Float((LevelMath.clamp(p) - 0.5) * 180)
+    }
+
+    // Direction of a room placement in degrees: 0 front, negative left,
+    // positive right, +-180 behind. x right, y forward, meters.
+    static func azimuth(x: Double, y: Double) -> Float {
+        Float(atan2(x, y) * 180 / .pi)
+    }
+
+    static func distance(x: Double, y: Double) -> Double {
+        (x * x + y * y).squareRoot()
+    }
+
+    // Wavefront alignment: nearer speakers wait for the farthest one so
+    // everything arrives at the listener together. 343 m/s in air.
+    static func delaySamples(distances: [Float], sampleRate: Double) -> [Int] {
+        let dMax = distances.max() ?? 0
+        return distances.map { Int((Double(dMax - $0) / 343.0 * sampleRate).rounded()) }
+    }
+
     // Aggregate output channel (0-based) to L/R content gains. Devices
     // are laid out in aggregate order after outputOffset leading channels
     // (the loopback device's own outputs, which must stay silent).

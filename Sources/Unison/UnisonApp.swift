@@ -143,28 +143,36 @@ struct UnisonApp: App {
         watcher.onChange = { [weak s, weak engine, weak cfg] in
             s?.refreshDevices()
             guard let engine, let cfg else { return }
-            let positions = cfg.spatialEnabled ? cfg.spatialPositions : nil
             if engine.isRunning {
                 // Rebuild only when a device really came or went; creating
                 // our own aggregate fires this notification too, and an
                 // unconditional restart loops forever.
                 if engine.realDevicesChanged() {
-                    _ = engine.start(positions: positions,
+                    _ = engine.start(mode: cfg.mixMode,
                                      excluded: cfg.spatialExcluded)
                 }
             } else if !engine.captureDenied {
                 // A start that failed on a transient device state gets
                 // another chance when devices change.
-                _ = engine.start(positions: positions,
+                _ = engine.start(mode: cfg.mixMode,
                                  excluded: cfg.spatialExcluded)
             }
             updateRoute()
         }
         watcher.start()
+        // One-time migration: slider-era positions become room placements
+        // on the front arc at the default listening distance.
+        if cfg.speakerPlacements.isEmpty, !cfg.spatialPositions.isEmpty {
+            var migrated: [String: [Double]] = [:]
+            for (id, p) in cfg.spatialPositions {
+                let rad = Double(SpatialMix.azimuth(fromPosition: p)) * .pi / 180
+                migrated[id] = [sin(rad) * 1.5, cos(rad) * 1.5]
+            }
+            cfg.speakerPlacements = migrated
+        }
         // The engine always runs: it is what plays sound through every
-        // device at once. Stereo positions only changes the mix.
-        _ = spatial.start(positions: cfg.spatialEnabled ? cfg.spatialPositions : nil,
-                          excluded: cfg.spatialExcluded)
+        // device at once. The sound mode only changes the mix.
+        _ = spatial.start(mode: cfg.mixMode, excluded: cfg.spatialExcluded)
         updateRoute()
     }
 

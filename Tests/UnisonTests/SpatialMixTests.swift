@@ -55,6 +55,69 @@ struct SpatialMixTests {
         }
     }
 
+    // Coincident speakers silence the whole spatial mixer, so duplicates
+    // fan out to distinct whole degrees; unique positions stay put.
+    @Test func coincidentSpeakersSpreadApart() {
+        let spread = SpatialMixerRenderer.spreadCoincident([
+            .init(aggregateChannel: 0, azimuth: -90),
+            .init(aggregateChannel: 1, azimuth: 90),
+            .init(aggregateChannel: 2, azimuth: -90),
+            .init(aggregateChannel: 3, azimuth: 90)
+        ])
+        #expect(Set(spread.map(\.azimuth)).count == 4)
+        #expect(spread[0].azimuth == -90)
+        #expect(spread[1].azimuth == 90)
+        #expect(abs(spread[2].azimuth - -90) <= 1)
+        #expect(abs(spread[3].azimuth - 90) <= 1)
+        #expect(spread.map(\.aggregateChannel) == [0, 1, 2, 3])
+    }
+
+    // Room placements: x right, y forward, angle from straight ahead.
+    @Test func azimuthFromPlacement() {
+        #expect(SpatialMix.azimuth(x: 0, y: 1.5) == 0)
+        #expect(SpatialMix.azimuth(x: 1.5, y: 0) == 90)
+        #expect(SpatialMix.azimuth(x: -1.5, y: 0) == -90)
+        #expect(abs(SpatialMix.azimuth(x: 0.75, y: 1.3) - 30) < 0.1)
+        #expect(abs(SpatialMix.azimuth(x: 0, y: -1.5)) == 180)
+        #expect(SpatialMix.distance(x: 3, y: 4) == 5)
+    }
+
+    // Nearer speakers wait for the farthest one: 1.5 m closer at 48 kHz
+    // is 210 samples, and the farthest speaker plays immediately.
+    @Test func delaysAlignWavefronts() {
+        let d = SpatialMix.delaySamples(distances: [1.5, 3.0], sampleRate: 48000)
+        #expect(d == [210, 0])
+        #expect(SpatialMix.delaySamples(distances: [2, 2, 2], sampleRate: 48000) == [0, 0, 0])
+    }
+
+    // The slider bridge maps 0...1 onto the front arc, clamped.
+    @Test func azimuthMapsSliderOntoFrontArc() {
+        #expect(SpatialMix.azimuth(fromPosition: 0) == -90)
+        #expect(SpatialMix.azimuth(fromPosition: 0.5) == 0)
+        #expect(SpatialMix.azimuth(fromPosition: 1) == 90)
+        #expect(SpatialMix.azimuth(fromPosition: -3) == -90)
+        #expect(SpatialMix.azimuth(fromPosition: 7) == 90)
+    }
+
+    // Play-through exclusion: the aggregate keeps every device, so an
+    // excluded device appears in deviceOrder but contributes no speakers.
+    // Its channels must stay silent while the others keep their gains.
+    @Test func excludedDeviceChannelsSilent() {
+        let speakers = [
+            SpatialSpeaker(deviceUID: "mon", channel: 1, name: "Monitor Left", position: 0.0),
+            SpatialSpeaker(deviceUID: "mon", channel: 2, name: "Monitor Right", position: 1.0)
+        ]
+        let matrix = SpatialMix.matrix(
+            speakers: speakers,
+            deviceOrder: ["mon", "lap"],
+            channelCounts: ["mon": 2, "lap": 2],
+            outputOffset: 0)
+        #expect(matrix[0] != nil)
+        #expect(matrix[1] != nil)
+        #expect(matrix[2] == nil)
+        #expect(matrix[3] == nil)
+    }
+
     // Devices not mentioned in the speaker list get silence, and unknown
     // devices in the speaker list are ignored.
     @Test func unmatchedChannelsAbsent() {
