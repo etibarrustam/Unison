@@ -72,28 +72,31 @@ struct SettingsView: View {
                         Slider(value: $settings.stepSize, in: 0.02...0.25)
                     }.padding(6)
                 }
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("The slider keeps a display dimmer than the rest, at every brightness.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach(state.displays) { d in
+                            balanceRow(name: d.name, isOn: enabledBinding(d.id),
+                                       scale: brightnessScaleBinding(d.id), word: "dimmer")
+                        }
+                    }.padding(6)
+                } label: {
+                    HStack {
+                        Text("Displays")
+                        InfoButton(text: "Untick a display to remove it from the menu panel and group control. The balance slider keeps one display always dimmer than the others: at 80% it sits 20% under the rest at every brightness level.")
+                    }
+                }
             }
             .frame(width: 280)
 
-            // Right: devices with balance adjustments
+            // Right: sound
             VStack(alignment: .leading, spacing: 14) {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
                         if let soloName {
-                            Text("Playing on \(soloName). Other devices and stereo positions resume when Unison is the selected output.")
+                            Text("Playing on \(soloName). The other speakers resume when Unison is the selected output.")
                                 .font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(state.speakers) { s in
-                            let inactive = soloActive && s.id != state.soloSpeakerID
-                            Group {
-                                deviceRow(id: s.id, name: s.name,
-                                          scale: volumeScaleBinding(s.id))
-                                if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
-                                    positionRow(s.id)
-                                }
-                            }
-                            .disabled(inactive)
-                            .opacity(inactive ? 0.35 : 1)
                         }
                         HStack {
                             // Reads as Stereo while a single device plays;
@@ -122,24 +125,15 @@ struct SettingsView: View {
                         spatialSection
                             .disabled(soloActive)
                             .opacity(soloActive ? 0.35 : 1)
+                        Divider()
+                        Text("A tick means the speaker plays. The slider keeps it quieter than the rest, at every volume.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        speakerRows
                     }.padding(6)
                 } label: {
                     HStack {
-                        Text("Speakers")
-                        InfoButton(text: "Untick a device to remove it from the menu and from group control; its level stays where it was. Max output caps a device relative to the rest: zero stays zero for everyone, levels rise together, and a device at 80% always sits below the others. Use it to keep one speaker quieter or one display dimmer at any volume.")
-                    }
-                }
-                GroupBox {
-                    VStack(alignment: .leading, spacing: 10) {
-                        ForEach(state.displays) { d in
-                            deviceRow(id: d.id, name: d.name,
-                                      scale: brightnessScaleBinding(d.id))
-                        }
-                    }.padding(6)
-                } label: {
-                    HStack {
-                        Text("Displays")
-                        InfoButton(text: "Works like the speaker settings: untick to exclude a display, and use max output to keep one display dimmer than the other at every brightness level.")
+                        Text("Sound")
+                        InfoButton(text: "Unticked speakers stay silent and leave the menu panel. The balance slider keeps a speaker permanently below the rest: at 80% it always sits 20% under the others while everything rises and falls together, and zero stays zero for everyone. Use it when one speaker is naturally louder than the rest.")
                     }
                 }
             }
@@ -180,6 +174,52 @@ struct SettingsView: View {
         }
     }
 
+    // One row per physical speaker. While the engine runs, rows come from
+    // the play-through devices merged with their volume-control twins by
+    // id or name: a monitor is one speaker to the user even though its
+    // audio device and its DDC volume control differ underneath.
+    @ViewBuilder
+    private var speakerRows: some View {
+        if let spatial, spatial.isRunning {
+            let devices = spatial.outputDeviceList()
+            ForEach(devices) { dev in
+                let match = state.speakers.first { $0.id == DeviceDiscovery.coreAudioSpeakerID(dev.uid) }
+                    ?? state.speakers.first { $0.name == dev.name }
+                let inactive = soloActive && match?.id != state.soloSpeakerID
+                balanceRow(name: dev.name,
+                           isOn: playsBinding(dev.uid, matchID: match?.id),
+                           scale: match.map { volumeScaleBinding($0.id) },
+                           word: "quieter")
+                    .disabled(inactive)
+                    .opacity(inactive ? 0.35 : 1)
+            }
+            // Volume-only speakers with no audio device of their own.
+            ForEach(unmatchedSpeakers(devices)) { s in
+                let inactive = soloActive && s.id != state.soloSpeakerID
+                balanceRow(name: s.name, isOn: enabledBinding(s.id),
+                           scale: volumeScaleBinding(s.id), word: "quieter")
+                    .disabled(inactive)
+                    .opacity(inactive ? 0.35 : 1)
+            }
+        } else {
+            ForEach(state.speakers) { s in
+                balanceRow(name: s.name, isOn: enabledBinding(s.id),
+                           scale: volumeScaleBinding(s.id), word: "quieter")
+                if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
+                    positionRow(s.id)
+                }
+            }
+        }
+    }
+
+    private func unmatchedSpeakers(_ devices: [SpatialOutputDevice]) -> [SpeakerDevice] {
+        state.speakers.filter { s in
+            !devices.contains { dev in
+                s.id == DeviceDiscovery.coreAudioSpeakerID(dev.uid) || s.name == dev.name
+            }
+        }
+    }
+
     @ViewBuilder
     private var spatialSection: some View {
         if let spatial {
@@ -187,12 +227,6 @@ struct SettingsView: View {
                 if settings.spatialEnabled {
                     Button("Arrange Speakers…") { showArrange = true }
                         .help("Drag every speaker to where it stands in your room, including behind you")
-                }
-                Divider()
-                Text("Play through")
-                    .font(.caption).foregroundStyle(.secondary)
-                ForEach(spatial.outputDeviceList()) { dev in
-                    Toggle(dev.name, isOn: spatialIncludedBinding(dev.uid))
                 }
             } else if spatial.captureDenied {
                 VStack(alignment: .leading, spacing: 6) {
@@ -208,11 +242,14 @@ struct SettingsView: View {
         }
     }
 
-    private func spatialIncludedBinding(_ uid: String) -> Binding<Bool> {
+    // The one tick a speaker has: silences it in the mix and hides it
+    // from the menu panel and group control together.
+    private func playsBinding(_ uid: String, matchID: String?) -> Binding<Bool> {
         Binding(get: { !settings.spatialExcluded.contains(uid) },
                 set: { on in
                     if on { settings.spatialExcluded.remove(uid) }
                     else { settings.spatialExcluded.insert(uid) }
+                    if let matchID { settings.setEnabled(matchID, on) }
                     // Mix-level change: no engine rebuild, no dropout.
                     spatial?.setExcluded(settings.spatialExcluded, mode: settings.mixMode)
                 })
@@ -239,21 +276,24 @@ struct SettingsView: View {
         return pct < 0 ? "\(-pct)% left" : "\(pct)% right"
     }
 
-    private func deviceRow(id: String, name: String, scale: Binding<Double>) -> some View {
+    private func balanceRow(name: String, isOn: Binding<Bool>,
+                            scale: Binding<Double>?, word: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Toggle(name, isOn: enabledBinding(id))
+                Toggle(name, isOn: isOn)
                 Spacer()
-                Text(scaleLabel(scale.wrappedValue))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                if let scale {
+                    Text(scaleLabel(scale.wrappedValue, word))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
             }
-            Slider(value: scale, in: 0.1...1.0)
+            if let scale { Slider(value: scale, in: 0.1...1.0) }
         }
     }
 
-    private func scaleLabel(_ v: Double) -> String {
+    private func scaleLabel(_ v: Double, _ word: String) -> String {
         let pct = Int((v * 100).rounded())
-        return pct >= 100 ? "full output" : "max output \(pct)%"
+        return pct >= 100 ? "level with the rest" : "always \(100 - pct)% \(word)"
     }
 
     private func enabledBinding(_ id: String) -> Binding<Bool> {
