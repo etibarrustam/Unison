@@ -7,6 +7,7 @@ struct AudioOutput: Identifiable {
     let name: String
     let supportsSoftwareVolume: Bool
     let isVirtualOrAggregate: Bool
+    let isBuiltin: Bool
 }
 
 final class AudioController {
@@ -21,7 +22,8 @@ final class AudioController {
                 || t == kAudioDeviceTransportTypeAutoAggregate
             return AudioOutput(id: id, uid: uid(id), name: name(id),
                                supportsSoftwareVolume: hasSettableVolume(id),
-                               isVirtualOrAggregate: virtualOrAggregate)
+                               isVirtualOrAggregate: virtualOrAggregate,
+                               isBuiltin: t == kAudioDeviceTransportTypeBuiltIn)
         }
     }
 

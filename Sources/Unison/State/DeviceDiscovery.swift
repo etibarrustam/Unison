@@ -3,6 +3,10 @@ import AppKit
 
 @MainActor
 enum DeviceDiscovery {
+    // Speaker id for a CoreAudio output; route matching relies on the
+    // same format, so it lives in one place.
+    static func coreAudioSpeakerID(_ uid: String) -> String { "spk-ca-\(uid)" }
+
     static func buildInitialState() -> (speakers: [SpeakerDevice], displays: [DisplayDevice], applier: HardwareApplier) {
         let audio = AudioController()
         let ddc = DDCController()
@@ -20,7 +24,7 @@ enum DeviceDiscovery {
         var balanceMax: [String: Int] = [:]
         for out in audio.outputDevices()
         where out.supportsSoftwareVolume && !out.isVirtualOrAggregate {
-            let key = "spk-ca-\(out.uid)"
+            let key = coreAudioSpeakerID(out.uid)
             speakers.append(SpeakerDevice(id: key, name: out.name,
                 backend: .coreAudio(out.id),
                 volume: saved["vol.\(key)"] ?? 0.3, muted: false,

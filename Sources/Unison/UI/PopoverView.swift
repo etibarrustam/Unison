@@ -12,6 +12,16 @@ struct PopoverView: View {
     private var enabledSpeakers: [SpeakerDevice] {
         state.speakers.filter { settings.isEnabled($0.id) }
     }
+    // The speakers group actions reach: all of them, or just the one the
+    // Sound list points at.
+    private var controlledSpeakers: [SpeakerDevice] {
+        guard let solo = state.soloSpeakerID else { return enabledSpeakers }
+        return enabledSpeakers.filter { $0.id == solo }
+    }
+    private var soloName: String? {
+        guard let solo = state.soloSpeakerID else { return nil }
+        return state.speakers.first { $0.id == solo }?.name
+    }
 
     private func average(_ xs: [Double]) -> Double {
         xs.isEmpty ? 0 : xs.reduce(0, +) / Double(xs.count)
@@ -37,15 +47,22 @@ struct PopoverView: View {
 
             // Right: Sound
             VStack(alignment: .leading, spacing: 12) {
-                columnHeader("Sound") { state.setAllVolume(average(enabledSpeakers.map(\.volume))) }
+                columnHeader("Sound") { state.setAllVolume(average(controlledSpeakers.map(\.volume))) }
+                if let soloName {
+                    Text("Playing on \(soloName)")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 GroupSliderRow(title: "All Speakers", systemImage: "speaker.wave.3.fill",
-                               average: average(enabledSpeakers.map(\.volume)),
+                               average: average(controlledSpeakers.map(\.volume)),
                                nudge: { state.nudgeAllVolume($0) })
                 Divider()
                 ForEach(enabledSpeakers) { s in
+                    let inactive = state.soloSpeakerID != nil && s.id != state.soloSpeakerID
                     DeviceSliderRow(title: s.name, systemImage: "hifispeaker",
                                     value: Binding(get: { s.volume },
                                                    set: { state.setVolume(id: s.id, $0) }))
+                        .disabled(inactive)
+                        .opacity(inactive ? 0.35 : 1)
                 }
             }.frame(width: 220)
         }

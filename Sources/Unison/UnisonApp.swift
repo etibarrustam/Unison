@@ -101,7 +101,12 @@ struct UnisonApp: App {
         _settings = StateObject(wrappedValue: cfg)
         ReopenHandler.settings = cfg
         ReopenHandler.state = s
-        s.isEnabled = { [weak cfg] id in cfg?.isEnabled(id) ?? true }
+        // Group operations respect the settings toggle and, while the
+        // Sound list points at one real device, touch only that device.
+        s.isEnabled = { [weak cfg, weak s] id in
+            (cfg?.isEnabled(id) ?? true)
+                && (s?.soloSpeakerID == nil || s?.soloSpeakerID == id)
+        }
         s.volumeScale = { [weak cfg] id in cfg?.volumeScales[id] ?? 1 }
         s.brightnessScale = { [weak cfg] id in cfg?.brightnessScales[id] ?? 1 }
         // Device-level pan is the fallback when the engine is not running.
@@ -115,6 +120,26 @@ struct UnisonApp: App {
         // launch write already respects per-device caps.
         s.applyAll()
         startKeyboard(s, cfg)
+        // Maps the Sound list selection onto our speaker list: by UID for
+        // CoreAudio devices, by name for DDC monitors whose HDMI audio is
+        // a different CoreAudio device. Unmatched routes fall back to nil
+        // so an unknown virtual device never locks every slider.
+        let updateRoute = { [weak s, weak engine] in
+            guard let s, let engine else { return }
+            let solo: String?
+            if let out = engine.activeOutput() {
+                let key = DeviceDiscovery.coreAudioSpeakerID(out.uid)
+                solo = (s.speakers.first { $0.id == key }
+                        ?? s.speakers.first { $0.name == out.name })?.id
+            } else {
+                solo = nil
+            }
+            if s.soloSpeakerID != solo {
+                s.soloSpeakerID = solo
+                NSLog("Unison: route -> \(solo ?? "all devices")")
+            }
+        }
+        watcher.onRouteChange = updateRoute
         watcher.onChange = { [weak s, weak engine, weak cfg] in
             s?.refreshDevices()
             guard let engine, let cfg else { return }
@@ -133,12 +158,14 @@ struct UnisonApp: App {
                 _ = engine.start(positions: positions,
                                  excluded: cfg.spatialExcluded)
             }
+            updateRoute()
         }
         watcher.start()
         // The engine always runs: it is what plays sound through every
         // device at once. Stereo positions only changes the mix.
         _ = spatial.start(positions: cfg.spatialEnabled ? cfg.spatialPositions : nil,
                           excluded: cfg.spatialExcluded)
+        updateRoute()
     }
 
     private func startKeyboard(_ state: AppState, _ settings: Settings) {
@@ -150,7 +177,14 @@ struct UnisonApp: App {
             case .volumeUp, .volumeDown:
                 let delta = key == .volumeUp ? step : -step
                 let shown: Double
-                if settings.keyboardTarget == "all" {
+                if let solo = state.soloSpeakerID,
+                   let s = state.speakers.first(where: { $0.id == solo }) {
+                    // One device selected in the Sound list: the keys
+                    // control it alone, whatever the configured target.
+                    let v = LevelMath.step(s.volume, by: delta)
+                    state.setVolume(id: s.id, v)
+                    shown = v
+                } else if settings.keyboardTarget == "all" {
                     state.nudgeAllVolume(delta)
                     shown = state.speakers.first?.volume ?? 0
                 } else if let s = state.speakers.first(where: { $0.id == settings.keyboardTarget }) {
@@ -165,7 +199,8 @@ struct UnisonApp: App {
             case .mute:
                 state.toggleMuteAll()
                 let muted = state.enabledSpeakersMuted
-                let v = muted ? 0 : state.speakers.first?.volume ?? 0
+                let first = state.speakers.first { state.isEnabled($0.id) } ?? state.speakers.first
+                let v = muted ? 0 : first?.volume ?? 0
                 LevelHUD.show(.mute, value: v, custom: settings.hudVolume)
             case .brightnessUp, .brightnessDown:
                 let delta = key == .brightnessUp ? step : -step

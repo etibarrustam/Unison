@@ -18,6 +18,10 @@ struct NullApplier: DeviceApplier {
 final class AppState: ObservableObject {
     @Published var speakers: [SpeakerDevice] = []
     @Published var displays: [DisplayDevice] = []
+    // Non-nil while the Sound list points at a single real device: only
+    // that speaker is controlled, the popover dims the rest. nil means
+    // audio flows through the Unison device to every speaker.
+    @Published var soloSpeakerID: String?
 
     private var applier: DeviceApplier
     private var persistWork: DispatchWorkItem?
