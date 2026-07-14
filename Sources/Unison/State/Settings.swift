@@ -8,7 +8,19 @@ final class Settings: ObservableObject {
     @AppStorage("unison.keyboardBrightnessTarget") var keyboardBrightnessTarget: String = "all"
     @AppStorage("unison.hudVolume") var hudVolume: Bool = true
     @AppStorage("unison.hudBrightness") var hudBrightness: Bool = true
-    @AppStorage("unison.spatial") var spatialEnabled: Bool = false
+    // "stereo", "mono", or "spatial". Replaces the old unison.spatial
+    // bool, which init migrates once.
+    @AppStorage("unison.soundMode") var soundMode: String = "stereo"
+
+    var spatialEnabled: Bool { soundMode == "spatial" }
+
+    var mixMode: MixMode {
+        switch soundMode {
+        case "spatial": return .spatial(speakerPlacements)
+        case "mono": return .mono
+        default: return .stereo
+        }
+    }
 
     // These publish manually and only on real changes: MenuBarExtra
     // rewrites its isInserted binding on every scene evaluation, and an
@@ -100,6 +112,11 @@ final class Settings: ObservableObject {
     func pan(_ id: String) -> Double { speakerPans[id] ?? 0.5 }
 
     init() {
+        // One-time migration from the spatial on/off toggle.
+        if UserDefaults.standard.object(forKey: "unison.soundMode") == nil,
+           UserDefaults.standard.bool(forKey: "unison.spatial") {
+            UserDefaults.standard.set("spatial", forKey: "unison.soundMode")
+        }
         spatialPositions = UserDefaults.standard.dictionary(forKey: "unison.spatialPositions") as? [String: Double] ?? [:]
         speakerPlacements = UserDefaults.standard.dictionary(forKey: "unison.speakerPlacements") as? [String: [Double]] ?? [:]
         spatialExcluded = Set(UserDefaults.standard.stringArray(forKey: "unison.spatialExcluded") ?? [])

@@ -99,12 +99,13 @@ struct SettingsView: View {
                             // Reads as Stereo while a single device plays;
                             // the stored preference survives and returns with
                             // the Unison output.
-                            Picker("Sound mode", selection: spatialEnabledBinding) {
-                                Text("Stereo").tag(false)
-                                Text("Spatial").tag(true)
+                            Picker("Sound mode", selection: soundModeBinding) {
+                                Text("Stereo").tag("stereo")
+                                Text("Mono").tag("mono")
+                                Text("Spatial").tag("spatial")
                             }
                             .fixedSize()
-                            InfoButton(text: "Spatial lets you drag every physical speaker to where it stands in your room, anywhere around you including behind, using Arrange Speakers. The macOS spatial mixer then renders the matching part of the stereo field to each speaker, and nearer speakers are delayed a fraction so everything arrives at your seat together. Stereo keeps playing through all ticked devices with their natural left and right, without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            InfoButton(text: "Stereo plays every ticked device with its natural left and right. Mono plays the complete mix on every speaker, best when speakers sit in different places or rooms so nobody hears only half the music. Spatial lets you drag every physical speaker to where it stands in your room, anywhere around you including behind, using Arrange Speakers; the macOS spatial mixer renders the matching part of the stereo field to each speaker, and nearer speakers are delayed a fraction so everything arrives at your seat together. Applies while Unison is the selected sound output; picking a single device plays through it alone until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                             Spacer(minLength: 0)
                             Button("Reset") { resetStereoAdjustments() }
                                 .buttonStyle(.link).font(.caption)
@@ -112,10 +113,10 @@ struct SettingsView: View {
                         }
                         .disabled(soloActive)
                         .opacity(soloActive ? 0.35 : 1)
-                        .onChange(of: settings.spatialEnabled) { _, on in
+                        .onChange(of: settings.soundMode) { _, _ in
                             // The engine keeps playing through all devices
-                            // either way; the toggle only changes the mix.
-                            spatial?.applyMix(placements: on ? settings.speakerPlacements : nil)
+                            // in every mode; the picker only changes the mix.
+                            spatial?.applyMix(mode: settings.mixMode)
                             state.applyAll()
                         }
                         spatialSection
@@ -153,11 +154,11 @@ struct SettingsView: View {
         return state.speakers.first { $0.id == solo }?.name
     }
 
-    // Unticked and inert while a single device is selected in the Sound
-    // list, without erasing the stored preference.
-    private var spatialEnabledBinding: Binding<Bool> {
-        Binding(get: { settings.spatialEnabled && !soloActive },
-                set: { settings.spatialEnabled = $0 })
+    // Reads as Stereo and inert while a single device is selected in the
+    // Sound list, without erasing the stored preference.
+    private var soundModeBinding: Binding<String> {
+        Binding(get: { soloActive ? "stereo" : settings.soundMode },
+                set: { settings.soundMode = $0 })
     }
 
     // Clears every kind of stereo adjustment: room placements, the legacy
@@ -167,7 +168,7 @@ struct SettingsView: View {
         settings.speakerPlacements = [:]
         settings.spatialPositions = [:]
         settings.speakerPans = [:]
-        spatial?.applyMix(placements: settings.spatialEnabled ? [:] : nil)
+        spatial?.applyMix(mode: settings.mixMode)
         state.applyAll()
     }
 
@@ -213,8 +214,7 @@ struct SettingsView: View {
                     if on { settings.spatialExcluded.remove(uid) }
                     else { settings.spatialExcluded.insert(uid) }
                     // Mix-level change: no engine rebuild, no dropout.
-                    spatial?.setExcluded(settings.spatialExcluded,
-                                         placements: settings.spatialEnabled ? settings.speakerPlacements : nil)
+                    spatial?.setExcluded(settings.spatialExcluded, mode: settings.mixMode)
                 })
     }
 

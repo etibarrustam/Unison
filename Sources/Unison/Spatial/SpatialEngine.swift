@@ -195,12 +195,11 @@ final class SpatialEngine: ObservableObject {
             || Dictionary(uniqueKeysWithValues: current.map { ($0.uid, $0.channels) }) != channelCounts
     }
 
-    // placements nil means passthrough: no positioning, every device keeps
-    // its natural stereo. The engine runs either way, because it is the
-    // only path that plays through more than one device at once.
-    // Exclusions only shape the mix; the aggregate always holds every
-    // real output, so play-through toggles never rebuild anything.
-    func start(placements: [String: [Double]]?, excluded: Set<String>) -> Bool {
+    // The engine runs in every mode, because it is the only path that
+    // plays through more than one device at once; the mode only changes
+    // the mix. Exclusions only shape the mix too; the aggregate always
+    // holds every real output, so play-through toggles never rebuild.
+    func start(mode: MixMode, excluded: Set<String>) -> Bool {
         teardownIO()
         isRunning = false
         self.excluded = excluded
@@ -251,7 +250,7 @@ final class SpatialEngine: ObservableObject {
             return false
         }
 
-        applyMix(placements: placements)
+        applyMix(mode: mode)
         isRunning = true
         startDebugDump()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
@@ -279,9 +278,9 @@ final class SpatialEngine: ObservableObject {
 
     // Play-through toggles: reshape the mix in place. Nothing is torn
     // down, so the toggle is instant and cannot race coreaudiod.
-    func setExcluded(_ excluded: Set<String>, placements: [String: [Double]]?) {
+    func setExcluded(_ excluded: Set<String>, mode: MixMode) {
         self.excluded = excluded
-        applyMix(placements: placements)
+        applyMix(mode: mode)
     }
 
     // Stops IO and drops the private aggregate, keeping the tap. The tap
@@ -339,16 +338,28 @@ final class SpatialEngine: ObservableObject {
         return true
     }
 
-    func applyMix(placements: [String: [Double]]?) {
+    func applyMix(mode: MixMode) {
         var speakers = availableSpeakers()
-        var chans: [SpatialMixerRenderer.SpeakerChannel] = []
-        if let placements {
+        var mixerChans: [SpatialMixerRenderer.SpeakerChannel]?
+        switch mode {
+        case .stereo:
+            break  // natural defaults are exactly the passthrough mapping
+        case .mono:
+            // Every speaker plays the complete mix; the matrix normalizes
+            // the correlated sum so it cannot clip.
+            speakers = speakers.map { s in
+                var m = s
+                m.position = 0.5
+                return m
+            }
+        case .spatial(let placements):
             var offsets: [String: Int] = [:]
             var next = 0
             for uid in deviceOrder {
                 offsets[uid] = next
                 next += channelCounts[uid] ?? 0
             }
+            var chans: [SpatialMixerRenderer.SpeakerChannel] = []
             speakers = speakers.map { s in
                 var m = s
                 let p = placements[s.id].flatMap { $0.count == 2 ? $0 : nil }
@@ -365,14 +376,15 @@ final class SpatialEngine: ObservableObject {
                 }
                 return m
             }
+            mixerChans = chans
         }
-        // The matrix is always configured: it is the stereo path and the
-        // live fallback whenever the spatial mixer cannot render.
+        // The matrix is always configured: it is the stereo and mono path
+        // and the live fallback whenever the spatial mixer cannot render.
         state.setMatrix(SpatialMix.matrix(speakers: speakers,
                                           deviceOrder: deviceOrder,
                                           channelCounts: channelCounts,
                                           outputOffset: 0))
-        rebuildMixer(chans: placements != nil ? chans : nil)
+        rebuildMixer(chans: mixerChans)
     }
 
     // The natural stereo triangle: left and right 30 degrees off center,

@@ -10,6 +10,13 @@ struct SpatialSpeaker: Identifiable {
     var id: String { "\(deviceUID)#\(channel)" }
 }
 
+// How the engine mixes onto the speakers.
+enum MixMode: Equatable {
+    case stereo                       // every device keeps its natural stereo
+    case mono                         // the complete mix on every speaker
+    case spatial([String: [Double]])  // room placements drive the spatial mixer
+}
+
 enum SpatialMix {
     // Legacy slider mapping, still used to migrate old settings: a 0...1
     // position maps onto the front arc, -90 (full left) to +90 (right).

@@ -143,19 +143,18 @@ struct UnisonApp: App {
         watcher.onChange = { [weak s, weak engine, weak cfg] in
             s?.refreshDevices()
             guard let engine, let cfg else { return }
-            let placements = cfg.spatialEnabled ? cfg.speakerPlacements : nil
             if engine.isRunning {
                 // Rebuild only when a device really came or went; creating
                 // our own aggregate fires this notification too, and an
                 // unconditional restart loops forever.
                 if engine.realDevicesChanged() {
-                    _ = engine.start(placements: placements,
+                    _ = engine.start(mode: cfg.mixMode,
                                      excluded: cfg.spatialExcluded)
                 }
             } else if !engine.captureDenied {
                 // A start that failed on a transient device state gets
                 // another chance when devices change.
-                _ = engine.start(placements: placements,
+                _ = engine.start(mode: cfg.mixMode,
                                  excluded: cfg.spatialExcluded)
             }
             updateRoute()
@@ -173,8 +172,7 @@ struct UnisonApp: App {
         }
         // The engine always runs: it is what plays sound through every
         // device at once. The sound mode only changes the mix.
-        _ = spatial.start(placements: cfg.spatialEnabled ? cfg.speakerPlacements : nil,
-                          excluded: cfg.spatialExcluded)
+        _ = spatial.start(mode: cfg.mixMode, excluded: cfg.spatialExcluded)
         updateRoute()
     }
 

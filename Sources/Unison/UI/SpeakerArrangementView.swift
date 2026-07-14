@@ -109,7 +109,7 @@ struct SpeakerArrangementView: View {
     }
 
     private func apply() {
-        spatial.applyMix(placements: settings.speakerPlacements)
+        spatial.applyMix(mode: .spatial(settings.speakerPlacements))
     }
 
     // MARK: - Geometry
