@@ -379,6 +379,21 @@ final class SpatialEngine: ObservableObject {
         return true
     }
 
+    // The real device the Sound list currently points at, or nil while it
+    // points at our public device (or the public device does not exist),
+    // which callers treat as "all devices".
+    func activeOutput() -> (uid: String, name: String)? {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var dev = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr,
+                                         0, nil, &size, &dev) == noErr,
+              dev != 0, publicID != 0, dev != publicID else { return nil }
+        guard let out = AudioController().outputDevices().first(where: { $0.id == dev }) else { return nil }
+        return (out.uid, out.name)
+    }
+
     private func setDefaultOutput(_ id: AudioDeviceID) {
         var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)

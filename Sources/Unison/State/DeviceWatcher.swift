@@ -7,6 +7,9 @@ import CoreAudio
 @MainActor
 final class DeviceWatcher {
     var onChange: (() -> Void)?
+    // Fires when the default output device changes: the user picked a
+    // device in the Sound list, or macOS auto-switched to headphones.
+    var onRouteChange: (() -> Void)?
     private var pending: DispatchWorkItem?
 
     func start() {
@@ -18,6 +21,16 @@ final class DeviceWatcher {
             AudioObjectID(kAudioObjectSystemObject), &addr, .main
         ) { [weak self] _, _ in
             MainActor.assumeIsolated { self?.schedule() }
+        }
+
+        var routeAddr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &routeAddr, .main
+        ) { [weak self] _, _ in
+            MainActor.assumeIsolated { self?.onRouteChange?() }
         }
 
         NotificationCenter.default.addObserver(
