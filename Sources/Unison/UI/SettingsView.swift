@@ -5,6 +5,7 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     @ObservedObject var state: AppState
     var spatial: SpatialEngine? = nil
+    @State private var showArrange = false
 
     var body: some View {
         // Scrollable: with several devices the right column grows past any
@@ -15,6 +16,11 @@ struct SettingsView: View {
         }
         .frame(width: 680)
         .frame(minHeight: 420, idealHeight: 560, maxHeight: 720)
+        .sheet(isPresented: $showArrange) {
+            if let spatial {
+                SpeakerArrangementView(settings: settings, spatial: spatial)
+            }
+        }
         .onAppear {
             // Device ids can change (replug, id scheme); a stale keyboard
             // target would leave the picker blank and silently act as all.
@@ -98,7 +104,7 @@ struct SettingsView: View {
                                 Text("Spatial").tag(true)
                             }
                             .fixedSize()
-                            InfoButton(text: "Spatial places every physical speaker where it sits, from full left to full right, and renders the mix through the macOS spatial mixer, so each speaker plays the part of the stereo field matching its location and stereo and 8D audio image correctly across all devices. Stereo keeps playing through all ticked devices with their natural left and right, without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            InfoButton(text: "Spatial lets you drag every physical speaker to where it stands in your room, anywhere around you including behind, using Arrange Speakers. The macOS spatial mixer then renders the matching part of the stereo field to each speaker, and nearer speakers are delayed a fraction so everything arrives at your seat together. Stereo keeps playing through all ticked devices with their natural left and right, without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                             Spacer(minLength: 0)
                             Button("Reset") { resetStereoAdjustments() }
                                 .buttonStyle(.link).font(.caption)
@@ -109,7 +115,7 @@ struct SettingsView: View {
                         .onChange(of: settings.spatialEnabled) { _, on in
                             // The engine keeps playing through all devices
                             // either way; the toggle only changes the mix.
-                            spatial?.applyMix(positions: on ? settings.spatialPositions : nil)
+                            spatial?.applyMix(placements: on ? settings.speakerPlacements : nil)
                             state.applyAll()
                         }
                         spatialSection
@@ -154,12 +160,14 @@ struct SettingsView: View {
                 set: { settings.spatialEnabled = $0 })
     }
 
-    // Clears both kinds of stereo adjustment: the engine's per-channel
-    // positions and the per-device pans used when the engine is off.
+    // Clears every kind of stereo adjustment: room placements, the legacy
+    // slider positions, and the per-device pans used when the engine is
+    // off. Speakers return to their natural stereo sides.
     private func resetStereoAdjustments() {
+        settings.speakerPlacements = [:]
         settings.spatialPositions = [:]
         settings.speakerPans = [:]
-        spatial?.applyMix(positions: settings.spatialEnabled ? [:] : nil)
+        spatial?.applyMix(placements: settings.spatialEnabled ? [:] : nil)
         state.applyAll()
     }
 
@@ -175,16 +183,15 @@ struct SettingsView: View {
     private var spatialSection: some View {
         if let spatial {
             if spatial.isRunning {
+                if settings.spatialEnabled {
+                    Button("Arrange Speakers…") { showArrange = true }
+                        .help("Drag every speaker to where it stands in your room, including behind you")
+                }
                 Divider()
                 Text("Play through")
                     .font(.caption).foregroundStyle(.secondary)
                 ForEach(spatial.outputDeviceList()) { dev in
                     Toggle(dev.name, isOn: spatialIncludedBinding(dev.uid))
-                    if settings.spatialEnabled, !soloActive, !settings.spatialExcluded.contains(dev.uid) {
-                        ForEach(spatial.availableSpeakers().filter { $0.deviceUID == dev.uid }) { sp in
-                            spatialSliderRow(sp, spatial: spatial)
-                        }
-                    }
                 }
             } else if spatial.captureDenied {
                 VStack(alignment: .leading, spacing: 6) {
@@ -200,27 +207,6 @@ struct SettingsView: View {
         }
     }
 
-    private func spatialSliderRow(_ sp: SpatialSpeaker, spatial: SpatialEngine) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(sp.name).font(.caption)
-            HStack(spacing: 8) {
-                Text("L").font(.caption).foregroundStyle(.secondary)
-                Slider(value: Binding(
-                    get: { settings.spatialPositions[sp.id] ?? sp.position },
-                    set: {
-                        settings.spatialPositions[sp.id] = $0
-                        spatial.applyMix(positions: settings.spatialPositions)
-                    }
-                ), in: 0...1)
-                Text("R").font(.caption).foregroundStyle(.secondary)
-                Text(panLabel(settings.spatialPositions[sp.id] ?? sp.position))
-                    .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .trailing)
-            }
-        }
-        .padding(.leading, 20)
-    }
-
     private func spatialIncludedBinding(_ uid: String) -> Binding<Bool> {
         Binding(get: { !settings.spatialExcluded.contains(uid) },
                 set: { on in
@@ -228,7 +214,7 @@ struct SettingsView: View {
                     else { settings.spatialExcluded.insert(uid) }
                     // Mix-level change: no engine rebuild, no dropout.
                     spatial?.setExcluded(settings.spatialExcluded,
-                                         positions: settings.spatialEnabled ? settings.spatialPositions : nil)
+                                         placements: settings.spatialEnabled ? settings.speakerPlacements : nil)
                 })
     }
 

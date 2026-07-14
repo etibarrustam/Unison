@@ -72,6 +72,24 @@ struct SpatialMixTests {
         #expect(spread.map(\.aggregateChannel) == [0, 1, 2, 3])
     }
 
+    // Room placements: x right, y forward, angle from straight ahead.
+    @Test func azimuthFromPlacement() {
+        #expect(SpatialMix.azimuth(x: 0, y: 1.5) == 0)
+        #expect(SpatialMix.azimuth(x: 1.5, y: 0) == 90)
+        #expect(SpatialMix.azimuth(x: -1.5, y: 0) == -90)
+        #expect(abs(SpatialMix.azimuth(x: 0.75, y: 1.3) - 30) < 0.1)
+        #expect(abs(SpatialMix.azimuth(x: 0, y: -1.5)) == 180)
+        #expect(SpatialMix.distance(x: 3, y: 4) == 5)
+    }
+
+    // Nearer speakers wait for the farthest one: 1.5 m closer at 48 kHz
+    // is 210 samples, and the farthest speaker plays immediately.
+    @Test func delaysAlignWavefronts() {
+        let d = SpatialMix.delaySamples(distances: [1.5, 3.0], sampleRate: 48000)
+        #expect(d == [210, 0])
+        #expect(SpatialMix.delaySamples(distances: [2, 2, 2], sampleRate: 48000) == [0, 0, 0])
+    }
+
     // The slider bridge maps 0...1 onto the front arc, clamped.
     @Test func azimuthMapsSliderOntoFrontArc() {
         #expect(SpatialMix.azimuth(fromPosition: 0) == -90)

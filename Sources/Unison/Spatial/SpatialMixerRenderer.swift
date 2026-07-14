@@ -13,15 +13,21 @@ import AudioToolbox
 // inside a render pass.
 final class SpatialMixerRenderer: @unchecked Sendable {
     // One physical speaker channel: where it sits in the aggregate's flat
-    // channel numbering and its direction from the listener in degrees
-    // (0 front, negative left, positive right).
+    // channel numbering, its direction from the listener in degrees
+    // (0 front, negative left, positive right, +-180 behind), and its
+    // distance in meters. Distance drives alignment delays only; loudness
+    // stays under the volume controls.
     struct SpeakerChannel {
         let aggregateChannel: Int
         let azimuth: Float
+        var distance: Float = 1
     }
 
     private static let maxFrames = 4096
     private static let sourceAzimuth: Float = 30  // virtual L/R speakers
+    // Ring capacity must cover maxFrames plus the largest alignment delay
+    // (a 6 m spread is ~840 samples at 48 kHz). Power of two for masking.
+    private static let ringCap = 8192
 
     private var unit: AudioUnit?
     private let speakers: [SpeakerChannel]
@@ -29,6 +35,11 @@ final class SpatialMixerRenderer: @unchecked Sendable {
     private var scratch: [UnsafeMutablePointer<Float32>] = []
     private var ablMem: UnsafeMutableRawPointer?  // preallocated: no malloc on the IO thread
     private var sampleTime: Double = 0
+    // Alignment delay per speaker in samples, with one ring per delayed
+    // speaker. Empty when every speaker is equidistant.
+    private var delays: [Int] = []
+    private var rings: [UnsafeMutablePointer<Float32>] = []
+    private var ringPos = 0
 
     // Input stash: valid only for the duration of one render pass.
     private var inL: UnsafePointer<Float32>?
@@ -74,6 +85,16 @@ final class SpatialMixerRenderer: @unchecked Sendable {
             byteCount: MemoryLayout<AudioBufferList>.size
                 + (speakers.count - 1) * MemoryLayout<AudioBuffer>.stride,
             alignment: 16)
+        delays = SpatialMix.delaySamples(distances: self.speakers.map(\.distance),
+                                         sampleRate: sampleRate)
+            .map { min($0, Self.ringCap - Self.maxFrames - 1) }
+        if delays.contains(where: { $0 > 0 }) {
+            rings = (0..<speakers.count).map { _ in
+                let p = UnsafeMutablePointer<Float32>.allocate(capacity: Self.ringCap)
+                p.initialize(repeating: 0, count: Self.ringCap)
+                return p
+            }
+        }
         ready = setup(sampleRate: sampleRate)
         if !ready { NSLog("Unison: spatial mixer setup failed, matrix fallback active") }
     }
@@ -94,7 +115,8 @@ final class SpatialMixerRenderer: @unchecked Sendable {
                 az = base + delta
             }
             used.insert(az)
-            return SpeakerChannel(aggregateChannel: s.aggregateChannel, azimuth: Float(az))
+            return SpeakerChannel(aggregateChannel: s.aggregateChannel, azimuth: Float(az),
+                                  distance: s.distance)
         }
     }
 
@@ -104,6 +126,7 @@ final class SpatialMixerRenderer: @unchecked Sendable {
             AudioComponentInstanceDispose(unit)
         }
         for p in scratch { p.deallocate() }
+        for p in rings { p.deallocate() }
         ablMem?.deallocate()
     }
 
@@ -252,10 +275,24 @@ final class SpatialMixerRenderer: @unchecked Sendable {
                 if let s = channelForFlatIndex[flatIndex + c] {
                     mapHits += 1
                     let src = scratch[s]
-                    for f in 0..<n {
-                        let v = src[f]
-                        data[f * ch + c] = v
-                        peak = max(peak, abs(v))
+                    if rings.isEmpty || delays[s] == 0 {
+                        for f in 0..<n {
+                            let v = src[f]
+                            data[f * ch + c] = v
+                            peak = max(peak, abs(v))
+                        }
+                    } else {
+                        // Alignment delay: write the fresh samples into the
+                        // ring, play the ones from delay samples ago.
+                        let ring = rings[s]
+                        let mask = Self.ringCap - 1
+                        let d = delays[s]
+                        for f in 0..<n {
+                            ring[(ringPos + f) & mask] = src[f]
+                            let v = ring[(ringPos + f - d + Self.ringCap) & mask]
+                            data[f * ch + c] = v
+                            peak = max(peak, abs(v))
+                        }
                     }
                     for f in n..<bufFrames { data[f * ch + c] = 0 }
                 } else {
@@ -264,6 +301,7 @@ final class SpatialMixerRenderer: @unchecked Sendable {
             }
             flatIndex += ch
         }
+        if !rings.isEmpty { ringPos = (ringPos + frames) & (Self.ringCap - 1) }
         return peak
     }
 }

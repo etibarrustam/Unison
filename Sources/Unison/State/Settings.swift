@@ -58,12 +58,23 @@ final class Settings: ObservableObject {
     }
 
     // Per-speaker-channel positions for the spatial engine, keyed by
-    // SpatialSpeaker.id, 0 left...1 right.
+    // SpatialSpeaker.id, 0 left...1 right. Legacy: superseded by
+    // speakerPlacements and kept only for one-time migration.
     var spatialPositions: [String: Double] {
         willSet { if newValue != spatialPositions { objectWillChange.send() } }
         didSet {
             guard spatialPositions != oldValue else { return }
             UserDefaults.standard.set(spatialPositions, forKey: "unison.spatialPositions")
+        }
+    }
+
+    // Room placement per speaker channel, keyed by SpatialSpeaker.id.
+    // [x, y] in meters, listener at the origin, x right, y forward.
+    var speakerPlacements: [String: [Double]] {
+        willSet { if newValue != speakerPlacements { objectWillChange.send() } }
+        didSet {
+            guard speakerPlacements != oldValue else { return }
+            UserDefaults.standard.set(speakerPlacements, forKey: "unison.speakerPlacements")
         }
     }
 
@@ -90,6 +101,7 @@ final class Settings: ObservableObject {
 
     init() {
         spatialPositions = UserDefaults.standard.dictionary(forKey: "unison.spatialPositions") as? [String: Double] ?? [:]
+        speakerPlacements = UserDefaults.standard.dictionary(forKey: "unison.speakerPlacements") as? [String: [Double]] ?? [:]
         spatialExcluded = Set(UserDefaults.standard.stringArray(forKey: "unison.spatialExcluded") ?? [])
         speakerPans = UserDefaults.standard.dictionary(forKey: "unison.speakerPans") as? [String: Double] ?? [:]
         menuIconVisible = UserDefaults.standard.object(forKey: "unison.menuIconVisible") as? Bool ?? true

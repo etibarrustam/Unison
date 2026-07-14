@@ -195,12 +195,12 @@ final class SpatialEngine: ObservableObject {
             || Dictionary(uniqueKeysWithValues: current.map { ($0.uid, $0.channels) }) != channelCounts
     }
 
-    // positions nil means passthrough: no positioning, every device keeps
+    // placements nil means passthrough: no positioning, every device keeps
     // its natural stereo. The engine runs either way, because it is the
     // only path that plays through more than one device at once.
     // Exclusions only shape the mix; the aggregate always holds every
     // real output, so play-through toggles never rebuild anything.
-    func start(positions: [String: Double]?, excluded: Set<String>) -> Bool {
+    func start(placements: [String: [Double]]?, excluded: Set<String>) -> Bool {
         teardownIO()
         isRunning = false
         self.excluded = excluded
@@ -251,7 +251,7 @@ final class SpatialEngine: ObservableObject {
             return false
         }
 
-        applyMix(positions: positions)
+        applyMix(placements: placements)
         isRunning = true
         startDebugDump()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
@@ -279,9 +279,9 @@ final class SpatialEngine: ObservableObject {
 
     // Play-through toggles: reshape the mix in place. Nothing is torn
     // down, so the toggle is instant and cannot race coreaudiod.
-    func setExcluded(_ excluded: Set<String>, positions: [String: Double]?) {
+    func setExcluded(_ excluded: Set<String>, placements: [String: [Double]]?) {
         self.excluded = excluded
-        applyMix(positions: positions)
+        applyMix(placements: placements)
     }
 
     // Stops IO and drops the private aggregate, keeping the tap. The tap
@@ -339,13 +339,32 @@ final class SpatialEngine: ObservableObject {
         return true
     }
 
-    func applyMix(positions: [String: Double]?) {
-        // Unset positions keep the natural default from availableSpeakers,
-        // which is also exactly the passthrough mapping for nil positions.
-        let speakers = availableSpeakers().map { s in
-            var m = s
-            if let positions, let p = positions[s.id] { m.position = p }
-            return m
+    func applyMix(placements: [String: [Double]]?) {
+        var speakers = availableSpeakers()
+        var chans: [SpatialMixerRenderer.SpeakerChannel] = []
+        if let placements {
+            var offsets: [String: Int] = [:]
+            var next = 0
+            for uid in deviceOrder {
+                offsets[uid] = next
+                next += channelCounts[uid] ?? 0
+            }
+            speakers = speakers.map { s in
+                var m = s
+                let p = placements[s.id].flatMap { $0.count == 2 ? $0 : nil }
+                    ?? defaultPlacement(s)
+                let az = SpatialMix.azimuth(x: p[0], y: p[1])
+                // Matrix fallback approximates the placement as a pan;
+                // sine folds rear angles onto the correct side.
+                m.position = LevelMath.clamp(0.5 + sin(Double(az) * .pi / 180) / 2)
+                if let base = offsets[s.deviceUID] {
+                    chans.append(SpatialMixerRenderer.SpeakerChannel(
+                        aggregateChannel: base + s.channel - 1,
+                        azimuth: az,
+                        distance: Float(SpatialMix.distance(x: p[0], y: p[1]))))
+                }
+                return m
+            }
         }
         // The matrix is always configured: it is the stereo path and the
         // live fallback whenever the spatial mixer cannot render.
@@ -353,33 +372,28 @@ final class SpatialEngine: ObservableObject {
                                           deviceOrder: deviceOrder,
                                           channelCounts: channelCounts,
                                           outputOffset: 0))
-        rebuildMixer(spatial: positions != nil, speakers: speakers)
+        rebuildMixer(chans: placements != nil ? chans : nil)
     }
 
-    // Debounced: slider drags call applyMix on every tick, and the
-    // mixer's output layout only changes through a full AU rebuild. The
-    // matrix keeps rendering until the fresh mixer swaps in.
-    private func rebuildMixer(spatial: Bool, speakers: [SpatialSpeaker]) {
+    // The natural stereo triangle: left and right 30 degrees off center,
+    // one and a half meters away. Other channel counts sit front center.
+    func defaultPlacement(_ s: SpatialSpeaker) -> [Double] {
+        guard channelCounts[s.deviceUID] == 2 else { return [0, 1.5] }
+        return [s.channel == 1 ? -0.75 : 0.75, 1.3]
+    }
+
+    // Debounced: dot drags call applyMix on every tick, and the mixer's
+    // output layout only changes through a full AU rebuild. The matrix
+    // keeps rendering until the fresh mixer swaps in.
+    private func rebuildMixer(chans: [SpatialMixerRenderer.SpeakerChannel]?) {
         mixerWork?.cancel()
-        guard spatial, aggregateID != 0 else {
+        guard let chans, aggregateID != 0 else {
             state.setMixer(nil)
             return
         }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.aggregateID != 0 else { return }
-                var offsets: [String: Int] = [:]
-                var next = 0
-                for uid in self.deviceOrder {
-                    offsets[uid] = next
-                    next += self.channelCounts[uid] ?? 0
-                }
-                let chans = speakers.compactMap { s -> SpatialMixerRenderer.SpeakerChannel? in
-                    guard let base = offsets[s.deviceUID] else { return nil }
-                    return SpatialMixerRenderer.SpeakerChannel(
-                        aggregateChannel: base + s.channel - 1,
-                        azimuth: SpatialMix.azimuth(fromPosition: s.position))
-                }
                 let renderer = SpatialMixerRenderer(speakers: chans,
                                                     sampleRate: self.aggregateSampleRate())
                 self.state.setMixer(renderer.ready ? renderer : nil)
