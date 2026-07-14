@@ -54,7 +54,7 @@ struct SettingsView: View {
                         row(Picker("Volume keys control", selection: $settings.keyboardTarget) {
                             Text("All devices").tag("all")
                             ForEach(state.speakers) { Text($0.name).tag($0.id) }
-                        }, info: "Which speakers the volume keys change. All devices moves everything together and keeps your balance; a single device leaves the others untouched.")
+                        }, info: "Which speakers the volume keys change. All devices moves everything together and keeps your balance; a single device leaves the others untouched. While one device is selected in the sound output list, the keys control that device alone.")
                         row(Picker("Brightness keys control", selection: $settings.keyboardBrightnessTarget) {
                             Text("All displays").tag("all")
                             ForEach(state.displays) { Text($0.name).tag($0.id) }
@@ -94,7 +94,7 @@ struct SettingsView: View {
                             // the stored preference survives and returns with
                             // the Unison output.
                             Toggle("Stereo positions", isOn: spatialEnabledBinding)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Works with any output selected in the sound settings; no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every position to center. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                             Spacer(minLength: 0)
                             Button("Reset") { resetStereoAdjustments() }
                                 .buttonStyle(.link).font(.caption)
