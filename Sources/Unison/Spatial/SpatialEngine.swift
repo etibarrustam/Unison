@@ -35,6 +35,10 @@ final class SpatialRenderState: @unchecked Sendable {
     // Diagnostics, written by the IO thread and read by the debug timer.
     var cbCount: Int = 0
     var inPeak: Float = 0
+    // Counts render passes whose input carried signal. Zero since the tap
+    // was created means the tap has never delivered a sample: the health
+    // check uses this to tell a dead tap from legitimate silence.
+    var inputTick: Int = 0
     var outPeak: Float = 0
     var inBufs: Int = 0
     var inChans: Int = 0
@@ -98,9 +102,12 @@ final class SpatialRenderState: @unchecked Sendable {
             return
         }
         let r = inR ?? l
+        var passPeak: Float = 0
         for f in 0..<frames {
-            inPeak = max(inPeak, max(abs(l[f * strideL]), abs(r[f * strideR])))
+            passPeak = max(passPeak, max(abs(l[f * strideL]), abs(r[f * strideR])))
         }
+        inPeak = max(inPeak, passPeak)
+        if passPeak > 0.001 { inputTick &+= 1 }
 
         if let m = currentMixer(),
            let peak = m.render(inL: l, strideL: strideL, inR: r, strideR: strideR,
@@ -164,7 +171,11 @@ final class SpatialEngine: ObservableObject {
     private var channelCounts: [String: Int] = [:]
     private var excluded: Set<String> = []
     private var debugTimer: Timer?
+    private var healthTimer: Timer?
     private var mixerWork: DispatchWorkItem?
+    private var lastMode: MixMode = .stereo
+    private var tapRebuilds = 0
+    private var nextTapAttempt = Date.distantPast
 
     // Every real output device, including excluded ones, so the settings
     // UI can offer re-inclusion.
@@ -203,6 +214,7 @@ final class SpatialEngine: ObservableObject {
         teardownIO()
         isRunning = false
         self.excluded = excluded
+        lastMode = mode
 
         let devices = allOutputDevicesSorted()
         guard !devices.isEmpty else { return false }
@@ -253,6 +265,7 @@ final class SpatialEngine: ObservableObject {
         applyMix(mode: mode)
         isRunning = true
         startDebugDump()
+        startHealthCheck()
         NSLog("Unison: spatial engine started, \(devices.count) devices")
         return true
     }
@@ -290,6 +303,8 @@ final class SpatialEngine: ObservableObject {
     private func teardownIO() {
         debugTimer?.invalidate()
         debugTimer = nil
+        healthTimer?.invalidate()
+        healthTimer = nil
         // A rebuilt aggregate renumbers channels; the matrix carries the
         // gap until applyMix swaps a matching mixer back in.
         mixerWork?.cancel()
@@ -335,7 +350,49 @@ final class SpatialEngine: ObservableObject {
         captureDenied = false
         tapID = tap
         tapUUID = tapDesc.uuid.uuidString
+        state.inputTick = 0  // the new tap has yet to prove itself
         return true
+    }
+
+    // Right after a quick relaunch, a fresh tap can bind while coreaudiod
+    // is still tearing down the previous instance and stay silent for up
+    // to a minute. Detectable with certainty: clients are rendering into
+    // the public Unison device while the tap has never delivered a single
+    // sample. Rebuild it until it proves itself; a tap that has captured
+    // once is never rebuilt, so pausing playback cannot trigger this.
+    private func startHealthCheck() {
+        healthTimer?.invalidate()
+        healthTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkTapHealth() }
+        }
+    }
+
+    private func checkTapHealth() {
+        guard isRunning, tapID != 0, publicID != 0 else { return }
+        guard state.inputTick == 0 else {
+            tapRebuilds = 0
+            return
+        }
+        guard deviceRunningSomewhere(publicID) else { return }
+        // Exponential backoff, never giving up: rebuilding too eagerly can
+        // itself re-trigger the settling race the rebuild works around.
+        let wait = min(60, 5 * (1 << min(tapRebuilds, 4)))
+        guard Date() >= nextTapAttempt.addingTimeInterval(Double(wait) - 5) else { return }
+        tapRebuilds += 1
+        nextTapAttempt = Date()
+        NSLog("Unison: tap silent while Unison is in use, rebuilding (attempt \(tapRebuilds))")
+        AudioHardwareDestroyProcessTap(tapID)
+        tapID = 0
+        _ = start(mode: lastMode, excluded: excluded)
+    }
+
+    private func deviceRunningSomewhere(_ id: AudioDeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyDeviceIsRunningSomewhere,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var v: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &v) == noErr else { return false }
+        return v != 0
     }
 
     func applyMix(mode: MixMode) {
