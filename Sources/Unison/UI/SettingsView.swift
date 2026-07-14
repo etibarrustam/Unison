@@ -230,7 +230,7 @@ struct SettingsView: View {
                 }
             } else if spatial.captureDenied {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("macOS blocked Unison from reading system audio. Allow Unison under System Audio Recording Only, then switch Stereo positions off and on.")
+                    Text("macOS blocked Unison from reading system audio. Allow Unison under System Audio Recording Only, then quit and reopen Unison.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Open Privacy Settings") {
                         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {

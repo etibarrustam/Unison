@@ -26,7 +26,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleExecutable</key><string>Unison</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleShortVersionString</key><string>0.1</string>
+  <key>CFBundleShortVersionString</key><string>0.2</string>
   <key>LSMinimumSystemVersion</key><string>14.4</string>
   <key>LSUIElement</key><true/>
   <key>NSAudioCaptureUsageDescription</key><string>Unison redistributes the sound your Mac plays across your speakers by their positions. It never uses the microphone.</string>
