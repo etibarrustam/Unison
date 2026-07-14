@@ -10,6 +10,28 @@ final class SpatialRenderState: @unchecked Sendable {
     // Dense per-output-channel gains; channels without a speaker stay 0.
     private var gainL = [Float](repeating: 0, count: 64)
     private var gainR = [Float](repeating: 0, count: 64)
+    // Spatial mode: Apple's spatial mixer renders instead of the gains.
+    // The matrix stays configured underneath as the fallback path.
+    private var mixer: SpatialMixerRenderer?
+
+    func setMixer(_ m: SpatialMixerRenderer?) {
+        os_unfair_lock_lock(&lock)
+        mixer = m
+        os_unfair_lock_unlock(&lock)
+    }
+
+    private func currentMixer() -> SpatialMixerRenderer? {
+        os_unfair_lock_lock(&lock)
+        defer { os_unfair_lock_unlock(&lock) }
+        return mixer
+    }
+
+    var hasMixer: Bool { currentMixer() != nil }
+
+    var mixerDiag: String {
+        guard let m = currentMixer() else { return "0" }
+        return "1 mcb=\(m.cbHits) mcbPk=\(m.cbPeak) mauPk=\(m.auPeak) mmap=\(m.mapHits) \(m.paramDump())"
+    }
     // Diagnostics, written by the IO thread and read by the debug timer.
     var cbCount: Int = 0
     var inPeak: Float = 0
@@ -80,6 +102,13 @@ final class SpatialRenderState: @unchecked Sendable {
             inPeak = max(inPeak, max(abs(l[f * strideL]), abs(r[f * strideR])))
         }
 
+        if let m = currentMixer(),
+           let peak = m.render(inL: l, strideL: strideL, inR: r, strideR: strideR,
+                               frames: frames, output: outABL) {
+            outPeak = max(outPeak, peak)
+            return
+        }
+
         var chIndex = 0
         for buf in outABL {
             let ch = max(1, Int(buf.mNumberChannels))
@@ -135,6 +164,7 @@ final class SpatialEngine: ObservableObject {
     private var channelCounts: [String: Int] = [:]
     private var excluded: Set<String> = []
     private var debugTimer: Timer?
+    private var mixerWork: DispatchWorkItem?
 
     // Every real output device, including excluded ones, so the settings
     // UI can offer re-inclusion.
@@ -142,13 +172,17 @@ final class SpatialEngine: ObservableObject {
         realOutputDevices().map { SpatialOutputDevice(uid: $0.uid, name: $0.name) }
     }
 
-    // Every channel of every included output device.
+    // Every channel of every included output device. The default position
+    // is the channel's natural stereo side, never center: a room full of
+    // coincident center speakers is a degenerate layout the spatial mixer
+    // cannot render, and natural stereo is the right starting sound anyway.
     func availableSpeakers() -> [SpatialSpeaker] {
         includedOutputDevices().flatMap { dev in
             (1...dev.channels).map { ch in
                 let side = dev.channels == 2 ? (ch == 1 ? "Left" : "Right") : "Ch \(ch)"
+                let natural = dev.channels == 2 ? (ch == 1 ? 0.0 : 1.0) : 0.5
                 return SpatialSpeaker(deviceUID: dev.uid, channel: ch,
-                                      name: "\(dev.name) \(side)", position: 0.5)
+                                      name: "\(dev.name) \(side)", position: natural)
             }
         }
     }
@@ -257,6 +291,10 @@ final class SpatialEngine: ObservableObject {
     private func teardownIO() {
         debugTimer?.invalidate()
         debugTimer = nil
+        // A rebuilt aggregate renumbers channels; the matrix carries the
+        // gap until applyMix swaps a matching mixer back in.
+        mixerWork?.cancel()
+        state.setMixer(nil)
         if let procID, aggregateID != 0 {
             AudioDeviceStop(aggregateID, procID)
             AudioDeviceDestroyIOProcID(aggregateID, procID)
@@ -302,22 +340,64 @@ final class SpatialEngine: ObservableObject {
     }
 
     func applyMix(positions: [String: Double]?) {
+        // Unset positions keep the natural default from availableSpeakers,
+        // which is also exactly the passthrough mapping for nil positions.
         let speakers = availableSpeakers().map { s in
             var m = s
-            if let positions {
-                m.position = positions[s.id] ?? 0.5
-            } else if channelCounts[s.deviceUID] == 2 {
-                // Passthrough: left channel plays left, right plays right.
-                m.position = s.channel == 1 ? 0 : 1
-            } else {
-                m.position = 0.5
-            }
+            if let positions, let p = positions[s.id] { m.position = p }
             return m
         }
+        // The matrix is always configured: it is the stereo path and the
+        // live fallback whenever the spatial mixer cannot render.
         state.setMatrix(SpatialMix.matrix(speakers: speakers,
                                           deviceOrder: deviceOrder,
                                           channelCounts: channelCounts,
                                           outputOffset: 0))
+        rebuildMixer(spatial: positions != nil, speakers: speakers)
+    }
+
+    // Debounced: slider drags call applyMix on every tick, and the
+    // mixer's output layout only changes through a full AU rebuild. The
+    // matrix keeps rendering until the fresh mixer swaps in.
+    private func rebuildMixer(spatial: Bool, speakers: [SpatialSpeaker]) {
+        mixerWork?.cancel()
+        guard spatial, aggregateID != 0 else {
+            state.setMixer(nil)
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.aggregateID != 0 else { return }
+                var offsets: [String: Int] = [:]
+                var next = 0
+                for uid in self.deviceOrder {
+                    offsets[uid] = next
+                    next += self.channelCounts[uid] ?? 0
+                }
+                let chans = speakers.compactMap { s -> SpatialMixerRenderer.SpeakerChannel? in
+                    guard let base = offsets[s.deviceUID] else { return nil }
+                    return SpatialMixerRenderer.SpeakerChannel(
+                        aggregateChannel: base + s.channel - 1,
+                        azimuth: SpatialMix.azimuth(fromPosition: s.position))
+                }
+                let renderer = SpatialMixerRenderer(speakers: chans,
+                                                    sampleRate: self.aggregateSampleRate())
+                self.state.setMixer(renderer.ready ? renderer : nil)
+            }
+        }
+        mixerWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func aggregateSampleRate() -> Double {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var rate: Float64 = 0
+        var size = UInt32(MemoryLayout<Float64>.size)
+        guard aggregateID != 0,
+              AudioObjectGetPropertyData(aggregateID, &addr, 0, nil, &size, &rate) == noErr,
+              rate > 0 else { return 48000 }
+        return rate
     }
 
     // Hidden diagnostics: defaults write com.unison.app unison.spatialDebug
@@ -327,7 +407,7 @@ final class SpatialEngine: ObservableObject {
         let s = state
         let order = deviceOrder
         debugTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            let line = "\(Date()) cb=\(s.cbCount) inPeak=\(s.inPeak) outPeak=\(s.outPeak) inBufs=\(s.inBufs) inChans=\(s.inChans) order=\(order)\n"
+            let line = "\(Date()) cb=\(s.cbCount) inPeak=\(s.inPeak) outPeak=\(s.outPeak) inBufs=\(s.inBufs) inChans=\(s.inChans) mixer=\(s.mixerDiag) order=\(order)\n"
             s.inPeak = 0
             s.outPeak = 0
             if let data = line.data(using: .utf8),
@@ -393,9 +473,13 @@ final class SpatialEngine: ObservableObject {
         }
         publicID = id
         usleep(150_000)  // let the new device publish before the tap targets it
-        // A freshly created device starts selected, so sound keeps flowing
-        // through Unison out of the box; the user can switch away anytime.
-        setDefaultOutput(id)
+        // Selected once, on the very first run after install, so the app
+        // works out of the box. Every later launch respects whatever the
+        // user picked in the Sound settings.
+        if !UserDefaults.standard.bool(forKey: "unison.autoSelectedOutput") {
+            UserDefaults.standard.set(true, forKey: "unison.autoSelectedOutput")
+            setDefaultOutput(id)
+        }
         NSLog("Unison: public output device created")
         return true
     }

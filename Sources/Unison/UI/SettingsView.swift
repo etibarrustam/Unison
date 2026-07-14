@@ -90,15 +90,19 @@ struct SettingsView: View {
                             .opacity(inactive ? 0.35 : 1)
                         }
                         HStack {
-                            // Reads as unticked while a single device plays;
+                            // Reads as Stereo while a single device plays;
                             // the stored preference survives and returns with
                             // the Unison output.
-                            Toggle("Stereo positions", isOn: spatialEnabledBinding)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every position to center. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                            Picker("Sound mode", selection: spatialEnabledBinding) {
+                                Text("Stereo").tag(false)
+                                Text("Spatial").tag(true)
+                            }
+                            .fixedSize()
+                            InfoButton(text: "Spatial places every physical speaker where it sits, from full left to full right, and renders the mix through the macOS spatial mixer, so each speaker plays the part of the stereo field matching its location and stereo and 8D audio image correctly across all devices. Stereo keeps playing through all ticked devices with their natural left and right, without positioning. Applies while Unison is the selected sound output; picking a single device plays through it alone and pauses positioning until Unison is selected again. Reset returns every speaker to its natural stereo side. No Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
                             Spacer(minLength: 0)
                             Button("Reset") { resetStereoAdjustments() }
                                 .buttonStyle(.link).font(.caption)
-                                .help("Return every speaker position to center")
+                                .help("Return every speaker to its natural stereo side")
                         }
                         .disabled(soloActive)
                         .opacity(soloActive ? 0.35 : 1)
@@ -202,14 +206,14 @@ struct SettingsView: View {
             HStack(spacing: 8) {
                 Text("L").font(.caption).foregroundStyle(.secondary)
                 Slider(value: Binding(
-                    get: { settings.spatialPositions[sp.id] ?? 0.5 },
+                    get: { settings.spatialPositions[sp.id] ?? sp.position },
                     set: {
                         settings.spatialPositions[sp.id] = $0
                         spatial.applyMix(positions: settings.spatialPositions)
                     }
                 ), in: 0...1)
                 Text("R").font(.caption).foregroundStyle(.secondary)
-                Text(panLabel(settings.spatialPositions[sp.id] ?? 0.5))
+                Text(panLabel(settings.spatialPositions[sp.id] ?? sp.position))
                     .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     .frame(width: 64, alignment: .trailing)
             }

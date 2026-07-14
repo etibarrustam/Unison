@@ -11,6 +11,12 @@ struct SpatialSpeaker: Identifiable {
 }
 
 enum SpatialMix {
+    // Bridge until the arrangement editor exists: a 0...1 slider position
+    // maps onto the front arc, -90 degrees (full left) to +90 (full right).
+    static func azimuth(fromPosition p: Double) -> Float {
+        Float((LevelMath.clamp(p) - 0.5) * 180)
+    }
+
     // Aggregate output channel (0-based) to L/R content gains. Devices
     // are laid out in aggregate order after outputOffset leading channels
     // (the loopback device's own outputs, which must stay silent).
