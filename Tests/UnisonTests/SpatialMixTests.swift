@@ -55,6 +55,25 @@ struct SpatialMixTests {
         }
     }
 
+    // Play-through exclusion: the aggregate keeps every device, so an
+    // excluded device appears in deviceOrder but contributes no speakers.
+    // Its channels must stay silent while the others keep their gains.
+    @Test func excludedDeviceChannelsSilent() {
+        let speakers = [
+            SpatialSpeaker(deviceUID: "mon", channel: 1, name: "Monitor Left", position: 0.0),
+            SpatialSpeaker(deviceUID: "mon", channel: 2, name: "Monitor Right", position: 1.0)
+        ]
+        let matrix = SpatialMix.matrix(
+            speakers: speakers,
+            deviceOrder: ["mon", "lap"],
+            channelCounts: ["mon": 2, "lap": 2],
+            outputOffset: 0)
+        #expect(matrix[0] != nil)
+        #expect(matrix[1] != nil)
+        #expect(matrix[2] == nil)
+        #expect(matrix[3] == nil)
+    }
+
     // Devices not mentioned in the speaker list get silence, and unknown
     // devices in the speaker list are ignored.
     @Test func unmatchedChannelsAbsent() {

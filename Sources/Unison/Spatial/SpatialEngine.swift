@@ -125,6 +125,7 @@ final class SpatialEngine: ObservableObject {
     private var aggregateID = AudioDeviceID(0)
     private var publicID = AudioDeviceID(0)
     private var tapID = AudioObjectID(0)
+    private var tapUUID = ""
     private var procID: AudioDeviceIOProcID?
     @Published private(set) var isRunning = false
     // True after a tap creation failure, which in practice means macOS
@@ -155,7 +156,7 @@ final class SpatialEngine: ObservableObject {
     // True when a device joined or left since the last start. The watcher
     // uses this so our own aggregate churn never triggers a rebuild loop.
     func realDevicesChanged() -> Bool {
-        let current = includedOutputDevices()
+        let current = allOutputDevicesSorted()
         return current.map(\.uid) != deviceOrder
             || Dictionary(uniqueKeysWithValues: current.map { ($0.uid, $0.channels) }) != channelCounts
     }
@@ -163,23 +164,119 @@ final class SpatialEngine: ObservableObject {
     // positions nil means passthrough: no positioning, every device keeps
     // its natural stereo. The engine runs either way, because it is the
     // only path that plays through more than one device at once.
+    // Exclusions only shape the mix; the aggregate always holds every
+    // real output, so play-through toggles never rebuild anything.
     func start(positions: [String: Double]?, excluded: Set<String>) -> Bool {
-        teardown()
+        teardownIO()
         isRunning = false
         self.excluded = excluded
 
-        let devices = includedOutputDevices()
+        let devices = allOutputDevicesSorted()
         guard !devices.isEmpty else { return false }
         deviceOrder = devices.map(\.uid)
         channelCounts = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0.channels) })
 
-        // Tap only what the system sends to the public Unison device and
-        // mute it there, so the Sound list stays honest: picking a real
-        // device plays natively, picking Unison feeds the engine. Our own
-        // process is excluded so the re-rendered mix does not feed back
-        // into the tap. Reading the tap needs the System Audio Recording
-        // permission, not the microphone one. If the public device cannot
-        // be made, fall back to the old global tap so sound still works.
+        guard ensureTap() else { return false }
+
+        // A public aggregate survives a crashed owner; a leftover with our
+        // UID must go before a new one can take its place.
+        if let stale = deviceID(uidContains: Self.aggregateUID) {
+            AudioHardwareDestroyAggregateDevice(stale)
+        }
+
+        // Aggregate: every real output plus the tap as input. Private:
+        // a public aggregate cannot bind a private tap (no input streams
+        // appear), and nothing needs to select this device anyway; the
+        // public Unison device is the one users select.
+        var subs: [[String: Any]] = []
+        for (i, d) in devices.enumerated() {
+            var sub: [String: Any] = [kAudioSubDeviceUIDKey as String: d.uid]
+            if i > 0 { sub[kAudioSubDeviceDriftCompensationKey as String] = 1 }
+            subs.append(sub)
+        }
+        let desc: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String: "Unison Spatial",
+            kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
+            kAudioAggregateDeviceSubDeviceListKey as String: subs,
+            kAudioAggregateDeviceMainSubDeviceKey as String: devices[0].uid,
+            kAudioAggregateDeviceTapListKey as String:
+                [[kAudioSubTapUIDKey as String: tapUUID]],
+            kAudioAggregateDeviceIsPrivateKey as String: 1,
+            kAudioAggregateDeviceIsStackedKey as String: 0
+        ]
+        var aggID = AudioDeviceID(0)
+        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else {
+            teardownIO()
+            return false
+        }
+        aggregateID = aggID
+        usleep(150_000)  // aggregate needs a moment to publish streams
+
+        guard setupIOProc(aggID) else {
+            teardownIO()
+            return false
+        }
+
+        applyMix(positions: positions)
+        isRunning = true
+        startDebugDump()
+        NSLog("Unison: spatial engine started, \(devices.count) devices")
+        return true
+    }
+
+    func stop() {
+        teardownIO()
+        // The tap and the Sound list entry outlive every engine rebuild;
+        // only a full stop removes them. macOS falls back to a real
+        // device when the default output vanishes.
+        if tapID != 0 {
+            AudioHardwareDestroyProcessTap(tapID)
+            tapID = 0
+        }
+        if publicID != 0 {
+            AudioHardwareDestroyAggregateDevice(publicID)
+            publicID = 0
+        }
+        if isRunning {
+            isRunning = false
+            NSLog("Unison: spatial engine stopped")
+        }
+    }
+
+    // Play-through toggles: reshape the mix in place. Nothing is torn
+    // down, so the toggle is instant and cannot race coreaudiod.
+    func setExcluded(_ excluded: Set<String>, positions: [String: Double]?) {
+        self.excluded = excluded
+        applyMix(positions: positions)
+    }
+
+    // Stops IO and drops the private aggregate, keeping the tap. The tap
+    // is created once per app run: recreating it right after destroying
+    // its predecessor can leave the new tap silent while the mute still
+    // applies, which was the play-through toggle bug.
+    private func teardownIO() {
+        debugTimer?.invalidate()
+        debugTimer = nil
+        if let procID, aggregateID != 0 {
+            AudioDeviceStop(aggregateID, procID)
+            AudioDeviceDestroyIOProcID(aggregateID, procID)
+        }
+        procID = nil
+        if aggregateID != 0 {
+            AudioHardwareDestroyAggregateDevice(aggregateID)
+            aggregateID = 0
+        }
+    }
+
+    // Tap only what the system sends to the public Unison device and
+    // mute it there, so the Sound list stays honest: picking a real
+    // device plays natively, picking Unison feeds the engine. Our own
+    // process is excluded so the re-rendered mix does not feed back
+    // into the tap. Reading the tap needs the System Audio Recording
+    // permission, not the microphone one. If the public device cannot
+    // be made, fall back to the old global tap so sound still works.
+    private func ensureTap() -> Bool {
+        if tapID != 0 { return true }
         let tapDesc: CATapDescription
         if ensurePublicDevice() {
             tapDesc = CATapDescription(excludingProcesses: [ownProcessObject()],
@@ -200,84 +297,8 @@ final class SpatialEngine: ObservableObject {
         }
         captureDenied = false
         tapID = tap
-
-        // A public aggregate survives a crashed owner; a leftover with our
-        // UID must go before a new one can take its place.
-        if let stale = deviceID(uidContains: Self.aggregateUID) {
-            AudioHardwareDestroyAggregateDevice(stale)
-        }
-
-        // Aggregate: all included outputs plus the tap as input. Private:
-        // a public aggregate cannot bind a private tap (no input streams
-        // appear), and nothing needs to select this device anyway; the
-        // public Unison device is the one users select.
-        var subs: [[String: Any]] = []
-        for (i, d) in devices.enumerated() {
-            var sub: [String: Any] = [kAudioSubDeviceUIDKey as String: d.uid]
-            if i > 0 { sub[kAudioSubDeviceDriftCompensationKey as String] = 1 }
-            subs.append(sub)
-        }
-        let desc: [String: Any] = [
-            kAudioAggregateDeviceNameKey as String: "Unison Spatial",
-            kAudioAggregateDeviceUIDKey as String: Self.aggregateUID,
-            kAudioAggregateDeviceSubDeviceListKey as String: subs,
-            kAudioAggregateDeviceMainSubDeviceKey as String: devices[0].uid,
-            kAudioAggregateDeviceTapListKey as String:
-                [[kAudioSubTapUIDKey as String: tapDesc.uuid.uuidString]],
-            kAudioAggregateDeviceIsPrivateKey as String: 1,
-            kAudioAggregateDeviceIsStackedKey as String: 0
-        ]
-        var aggID = AudioDeviceID(0)
-        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &aggID) == noErr else {
-            teardown()
-            return false
-        }
-        aggregateID = aggID
-        usleep(150_000)  // aggregate needs a moment to publish streams
-
-        guard setupIOProc(aggID) else {
-            teardown()
-            return false
-        }
-
-        applyMix(positions: positions)
-        isRunning = true
-        startDebugDump()
-        NSLog("Unison: spatial engine started, \(devices.count) devices")
+        tapUUID = tapDesc.uuid.uuidString
         return true
-    }
-
-    func stop() {
-        teardown()
-        // Only a full stop removes the Sound list entry; engine restarts
-        // keep it alive so the user's selection never bounces. macOS
-        // falls back to a real device when the default output vanishes.
-        if publicID != 0 {
-            AudioHardwareDestroyAggregateDevice(publicID)
-            publicID = 0
-        }
-        if isRunning {
-            isRunning = false
-            NSLog("Unison: spatial engine stopped")
-        }
-    }
-
-    private func teardown() {
-        debugTimer?.invalidate()
-        debugTimer = nil
-        if let procID, aggregateID != 0 {
-            AudioDeviceStop(aggregateID, procID)
-            AudioDeviceDestroyIOProcID(aggregateID, procID)
-        }
-        procID = nil
-        if aggregateID != 0 {
-            AudioHardwareDestroyAggregateDevice(aggregateID)
-            aggregateID = 0
-        }
-        if tapID != 0 {
-            AudioHardwareDestroyProcessTap(tapID)
-            tapID = 0
-        }
     }
 
     func applyMix(positions: [String: Double]?) {
@@ -404,9 +425,12 @@ final class SpatialEngine: ObservableObject {
 
     // Sorted by UID: CoreAudio enumeration order shuffles when unrelated
     // devices come and go, and a shuffle must not look like a hot-plug.
+    private func allOutputDevicesSorted() -> [OutputDevice] {
+        realOutputDevices().sorted { $0.uid < $1.uid }
+    }
+
     private func includedOutputDevices() -> [OutputDevice] {
-        realOutputDevices().filter { !excluded.contains($0.uid) }
-            .sorted { $0.uid < $1.uid }
+        allOutputDevicesSorted().filter { !excluded.contains($0.uid) }
     }
 
     private func setupIOProc(_ agg: AudioDeviceID) -> Bool {

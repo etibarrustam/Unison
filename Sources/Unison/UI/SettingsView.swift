@@ -222,8 +222,9 @@ struct SettingsView: View {
                 set: { on in
                     if on { settings.spatialExcluded.remove(uid) }
                     else { settings.spatialExcluded.insert(uid) }
-                    _ = spatial?.start(positions: settings.spatialEnabled ? settings.spatialPositions : nil,
-                                       excluded: settings.spatialExcluded)
+                    // Mix-level change: no engine rebuild, no dropout.
+                    spatial?.setExcluded(settings.spatialExcluded,
+                                         positions: settings.spatialEnabled ? settings.spatialPositions : nil)
                 })
     }
 
