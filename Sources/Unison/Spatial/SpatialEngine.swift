@@ -117,9 +117,13 @@ struct SpatialOutputDevice: Identifiable {
 @MainActor
 final class SpatialEngine: ObservableObject {
     static let aggregateUID = "com.unison.spatial.aggregate"
+    // The selectable "Unison" entry in the Sound output list. Picking it
+    // routes audio into the tap; picking any real device routes around us.
+    static let publicUID = "com.unison.output"
 
     private let state = SpatialRenderState()
     private var aggregateID = AudioDeviceID(0)
+    private var publicID = AudioDeviceID(0)
     private var tapID = AudioObjectID(0)
     private var procID: AudioDeviceIOProcID?
     @Published private(set) var isRunning = false
@@ -169,11 +173,21 @@ final class SpatialEngine: ObservableObject {
         deviceOrder = devices.map(\.uid)
         channelCounts = Dictionary(uniqueKeysWithValues: devices.map { ($0.uid, $0.channels) })
 
-        // Tap everything the system plays, mute it at its original
-        // destination, and exclude our own process so the re-rendered mix
-        // does not feed back into the tap. Reading the tap needs the
-        // System Audio Recording permission, not the microphone one.
-        let tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: [ownProcessObject()])
+        // Tap only what the system sends to the public Unison device and
+        // mute it there, so the Sound list stays honest: picking a real
+        // device plays natively, picking Unison feeds the engine. Our own
+        // process is excluded so the re-rendered mix does not feed back
+        // into the tap. Reading the tap needs the System Audio Recording
+        // permission, not the microphone one. If the public device cannot
+        // be made, fall back to the old global tap so sound still works.
+        let tapDesc: CATapDescription
+        if ensurePublicDevice() {
+            tapDesc = CATapDescription(excludingProcesses: [ownProcessObject()],
+                                       deviceUID: Self.publicUID, stream: 0)
+        } else {
+            NSLog("Unison: public device unavailable, falling back to global tap")
+            tapDesc = CATapDescription(stereoGlobalTapButExcludeProcesses: [ownProcessObject()])
+        }
         tapDesc.muteBehavior = .mutedWhenTapped
         tapDesc.name = "Unison Spatial Tap"
         tapDesc.isPrivate = true
@@ -196,7 +210,7 @@ final class SpatialEngine: ObservableObject {
         // Aggregate: all included outputs plus the tap as input. Private:
         // a public aggregate cannot bind a private tap (no input streams
         // appear), and nothing needs to select this device anyway; the
-        // tap hears system audio wherever it plays.
+        // public Unison device is the one users select.
         var subs: [[String: Any]] = []
         for (i, d) in devices.enumerated() {
             var sub: [String: Any] = [kAudioSubDeviceUIDKey as String: d.uid]
@@ -235,6 +249,13 @@ final class SpatialEngine: ObservableObject {
 
     func stop() {
         teardown()
+        // Only a full stop removes the Sound list entry; engine restarts
+        // keep it alive so the user's selection never bounces. macOS
+        // falls back to a real device when the default output vanishes.
+        if publicID != 0 {
+            AudioHardwareDestroyAggregateDevice(publicID)
+            publicID = 0
+        }
         if isRunning {
             isRunning = false
             NSLog("Unison: spatial engine stopped")
@@ -306,6 +327,7 @@ final class SpatialEngine: ObservableObject {
         let uid: String
         let name: String
         let channels: Int
+        let isBuiltin: Bool
     }
 
     private func realOutputDevices() -> [OutputDevice] {
@@ -315,8 +337,54 @@ final class SpatialEngine: ObservableObject {
             .compactMap { out in
                 let ch = outputChannels(out.id)
                 guard ch > 0 else { return nil }
-                return OutputDevice(id: out.id, uid: out.uid, name: out.name, channels: ch)
+                return OutputDevice(id: out.id, uid: out.uid, name: out.name,
+                                    channels: ch, isBuiltin: out.isBuiltin)
             }
+    }
+
+    // The public device the user selects as sound output. Anchored to the
+    // built-in output so its composition never changes on hot-plug: what
+    // reaches it is muted by the tap, so membership does not affect what
+    // plays where, but a stable composition keeps the Sound list selection
+    // from bouncing across engine restarts.
+    private func ensurePublicDevice() -> Bool {
+        if publicID != 0 { return true }
+        if let existing = deviceID(uidContains: Self.publicUID) {
+            // Left over from a crashed instance: adopt it and keep the
+            // user's current selection rather than churning the default.
+            publicID = existing
+            return true
+        }
+        let devices = realOutputDevices()
+        guard let anchor = devices.first(where: \.isBuiltin) ?? devices.first else { return false }
+        let desc: [String: Any] = [
+            kAudioAggregateDeviceNameKey as String: "Unison",
+            kAudioAggregateDeviceUIDKey as String: Self.publicUID,
+            kAudioAggregateDeviceSubDeviceListKey as String:
+                [[kAudioSubDeviceUIDKey as String: anchor.uid]],
+            kAudioAggregateDeviceMainSubDeviceKey as String: anchor.uid,
+            kAudioAggregateDeviceIsPrivateKey as String: 0,
+            kAudioAggregateDeviceIsStackedKey as String: 0
+        ]
+        var id = AudioDeviceID(0)
+        guard AudioHardwareCreateAggregateDevice(desc as CFDictionary, &id) == noErr, id != 0 else {
+            return false
+        }
+        publicID = id
+        usleep(150_000)  // let the new device publish before the tap targets it
+        // A freshly created device starts selected, so sound keeps flowing
+        // through Unison out of the box; the user can switch away anytime.
+        setDefaultOutput(id)
+        NSLog("Unison: public output device created")
+        return true
+    }
+
+    private func setDefaultOutput(_ id: AudioDeviceID) {
+        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
+        var v = id
+        _ = AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil,
+                                       UInt32(MemoryLayout<AudioDeviceID>.size), &v)
     }
 
     // Sorted by UID: CoreAudio enumeration order shuffles when unrelated
