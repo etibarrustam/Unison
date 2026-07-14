@@ -73,24 +73,41 @@ struct SettingsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 GroupBox {
                     VStack(alignment: .leading, spacing: 10) {
+                        if let soloName {
+                            Text("Playing on \(soloName). Other speakers and stereo positions apply when Unison is the selected output.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         ForEach(state.speakers) { s in
-                            deviceRow(id: s.id, name: s.name,
-                                      scale: volumeScaleBinding(s.id))
-                            if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
-                                positionRow(s.id)
+                            let inactive = state.soloSpeakerID != nil && s.id != state.soloSpeakerID
+                            Group {
+                                deviceRow(id: s.id, name: s.name,
+                                          scale: volumeScaleBinding(s.id))
+                                if settings.spatialEnabled && spatial?.isRunning != true && s.pannable {
+                                    positionRow(s.id)
+                                }
                             }
+                            .disabled(inactive)
+                            .opacity(inactive ? 0.35 : 1)
                         }
-                        HStack {
-                            Toggle("Stereo positions", isOn: $settings.spatialEnabled)
-                            InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Works with any output selected in the sound settings; no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                        Group {
+                            HStack {
+                                Toggle("Stereo positions", isOn: $settings.spatialEnabled)
+                                InfoButton(text: "Place every physical speaker where it sits, from full left to full right. Each speaker then plays the part of the stereo field matching its location, so stereo and 8D audio image correctly across all devices, including ones behind you. Off keeps playing through all ticked devices with their natural stereo, just without positioning. Works with any output selected in the sound settings; no Audio MIDI Setup needed. macOS asks once for the System Audio Recording permission.")
+                                Spacer(minLength: 0)
+                                Button("Reset") { resetStereoAdjustments() }
+                                    .buttonStyle(.link).font(.caption)
+                                    .help("Return every speaker position to center")
+                            }
+                            .onChange(of: settings.spatialEnabled) { _, on in
+                                // The engine keeps playing through all devices
+                                // either way; the toggle only changes the mix.
+                                spatial?.applyMix(positions: on ? settings.spatialPositions : nil)
+                                state.applyAll()
+                            }
+                            spatialSection
                         }
-                        .onChange(of: settings.spatialEnabled) { _, on in
-                            // The engine keeps playing through all devices
-                            // either way; the toggle only changes the mix.
-                            spatial?.applyMix(positions: on ? settings.spatialPositions : nil)
-                            state.applyAll()
-                        }
-                        spatialSection
+                        .disabled(state.soloSpeakerID != nil)
+                        .opacity(state.soloSpeakerID != nil ? 0.35 : 1)
                     }.padding(6)
                 } label: {
                     HStack {
@@ -114,6 +131,20 @@ struct SettingsView: View {
             }
             .frame(width: 340)
         }
+    }
+
+    private var soloName: String? {
+        guard let solo = state.soloSpeakerID else { return nil }
+        return state.speakers.first { $0.id == solo }?.name
+    }
+
+    // Clears both kinds of stereo adjustment: the engine's per-channel
+    // positions and the per-device pans used when the engine is off.
+    private func resetStereoAdjustments() {
+        settings.spatialPositions = [:]
+        settings.speakerPans = [:]
+        spatial?.applyMix(positions: settings.spatialEnabled ? [:] : nil)
+        state.applyAll()
     }
 
     private func row(_ content: some View, info: String) -> some View {
